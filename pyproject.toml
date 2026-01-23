@@ -1,0 +1,7 @@
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+known_first_party = ["autosim", "autosim_examples"]
