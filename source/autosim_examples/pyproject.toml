@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools", "wheel", "toml"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autosim_examples"
+version = "0.0.0"
+description = "autosim_examples: A minimal example package for data generation using autosim"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Yinghao Shuai", email = "yinghao.shuai@lightwheel.ai"}
+]
+maintainers = []
+keywords = ["autosim", "data generation", "isaaclab"]
+classifiers = [
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.10"
+dependencies = [
+]
+
+[project.urls]
+Homepage = "https://github.com/LightwheelAI/autosim"
+Repository = "https://github.com/LightwheelAI/autosim"
+
+[tool.setuptools]
+packages = {find = {}}
+include-package-data = true
+zip-safe = false
