@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
@@ -156,8 +155,7 @@ def unregister_pipeline(id: str) -> None:
 # Skill Registration System
 # ============================================================================
 # This section provides the registration and instantiation system for skills.
-# Skills can be registered manually or automatically discovered, then created
-# using SkillRegistry.create().
+# Skills can be registered manually, then created using SkillRegistry.create().
 #
 # Usage:
 #     # 1. Using decorator (recommended)
@@ -170,22 +168,16 @@ def unregister_pipeline(id: str) -> None:
 #         cfg = SkillCfg(name="my_skill", description="My custom skill")
 #     SkillRegistry.register(MySkill)
 #
-#     # 3. Auto-discovery
-#     SkillRegistry.auto_discover("autosim.skills")
-#
-#     # 4. Create a skill instance
+#     # 3. Create a skill instance
 #     skill = SkillRegistry.create("reach", extra_cfg={"param": "value"})
 #
-#     # 5. List all registered skills
+#     # 4. List all registered skills
 #     skill_configs = SkillRegistry.list_skills()
 # ============================================================================
 
 
 class SkillRegistry:
-    """
-    Skill Registry - Plugin-style management
-    Supports automatic discovery and registration of skills
-    """
+    """Skill Registry - Supports manual registration of skills."""
 
     _instance: SkillRegistry | None = None
     _skills: dict[str, Skill] = dict()
@@ -224,36 +216,9 @@ class SkillRegistry:
         """List all registered skill names."""
         return [skill_cls.get_cfg() for skill_cls in cls._skills.values()]
 
-    @classmethod
-    def auto_discover(cls, package_name: str = "autosim.skills") -> None:
-        """Auto-discover skills in the given package."""
-        import importlib
-        import pkgutil
-
-        try:
-            package = importlib.import_module(package_name)
-            for _, module_name, _ in pkgutil.iter_modules(package.__path__):
-                module = importlib.import_module(f"{package_name}.{module_name}")
-
-                # Find all Skill subclasses
-                for attr_name in dir(module):
-                    attr = getattr(module, attr_name)
-                    with contextlib.suppress(TypeError):
-                        if issubclass(attr, Skill) and attr is not Skill:
-                            cls.register(attr)
-        except ImportError:
-            pass
-
 
 def register_skill(name: str, description: str, required_modules: list[str] = []) -> type:
-    """
-    Decorator: Simplify skill definition
-
-    Usage:
-    @register_skill("reach", "Reach to target pose", ["curobo"])
-    class ReachSkill(Skill):
-        ...
-    """
+    """Decorator: Simplify skill definition."""
 
     def decorator(cls: type) -> type:
         from autosim.core.skill import SkillCfg
