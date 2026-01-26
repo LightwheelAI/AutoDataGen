@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from autosim.core.pipeline import AutoSimPipeline as Pipeline
+    from autosim.core.skill import Skill, SkillCfg
 
 
 # ============================================================================
@@ -153,6 +155,114 @@ def unregister_pipeline(id: str) -> None:
 # ============================================================================
 # Skill Registration System
 # ============================================================================
-# This section will provide the registration and instantiation system for
-# skills. (To be implemented)
+# This section provides the registration and instantiation system for skills.
+# Skills can be registered manually or automatically discovered, then created
+# using SkillRegistry.create().
+#
+# Usage:
+#     # 1. Using decorator (recommended)
+#     @register_skill("reach", "Reach to target pose", ["curobo"])
+#     class ReachSkill(Skill):
+#         ...
+#
+#     # 2. Manual registration
+#     class MySkill(Skill):
+#         cfg = SkillCfg(name="my_skill", description="My custom skill")
+#     SkillRegistry.register(MySkill)
+#
+#     # 3. Auto-discovery
+#     SkillRegistry.auto_discover("autosim.skills")
+#
+#     # 4. Create a skill instance
+#     skill = SkillRegistry.create("reach", extra_cfg={"param": "value"})
+#
+#     # 5. List all registered skills
+#     skill_configs = SkillRegistry.list_skills()
 # ============================================================================
+
+
+class SkillRegistry:
+    """
+    Skill Registry - Plugin-style management
+    Supports automatic discovery and registration of skills
+    """
+
+    _instance: SkillRegistry | None = None
+    _skills: dict[str, Skill] = dict()
+
+    def __new__(cls) -> SkillRegistry:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    def get_instance(cls) -> SkillRegistry:
+        """Get the instance of the skill registry."""
+        if cls._instance is None:
+            cls._instance = SkillRegistry()
+        return cls._instance
+
+    @classmethod
+    def register(cls, skill_cls: type) -> type:
+        """Register a skill in the registry."""
+        if not issubclass(skill_cls, Skill):
+            raise TypeError(f"Skill class '{skill_cls.__name__}' must inherit from Skill.")
+
+        cls._skills[skill_cls.cfg.name] = skill_cls
+        return skill_cls
+
+    @classmethod
+    def get(cls, name: str) -> type:
+        """Get a skill from the registry."""
+        if name not in cls._skills:
+            raise ValueError(f"Skill '{name}' not found in registry.")
+        return cls._skills[name]
+
+    @classmethod
+    def create(cls, name: str, extra_cfg: dict = {}) -> Skill:
+        """Create a skill instance from the registry."""
+        skill_cls = cls.get(name)
+        return skill_cls(extra_cfg)
+
+    @classmethod
+    def list_skills(cls) -> list[str]:
+        """List all registered skill names."""
+        return [skill_cls.get_cfg() for skill_cls in cls._skills.values()]
+
+    @classmethod
+    def auto_discover(cls, package_name: str = "autosim.skills") -> None:
+        """Auto-discover skills in the given package."""
+        import importlib
+        import pkgutil
+
+        try:
+            package = importlib.import_module(package_name)
+            for _, module_name, _ in pkgutil.iter_modules(package.__path__):
+                module = importlib.import_module(f"{package_name}.{module_name}")
+
+                # Find all Skill subclasses
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    with contextlib.suppress(TypeError):
+                        if issubclass(attr, Skill) and attr is not Skill:
+                            cls.register(attr)
+        except ImportError:
+            pass
+
+
+def register_skill(name: str, description: str, required_modules: list[str] = []) -> type:
+    """
+    Decorator: Simplify skill definition
+
+    Usage:
+    @register_skill("reach", "Reach to target pose", ["curobo"])
+    class ReachSkill(Skill):
+        ...
+    """
+
+    def decorator(cls: type) -> type:
+        cls.cfg = SkillCfg(name=name, description=description, required_modules=required_modules)
+        SkillRegistry.register(cls)
+        return cls
+
+    return decorator
