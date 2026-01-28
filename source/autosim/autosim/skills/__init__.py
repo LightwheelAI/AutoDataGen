@@ -17,7 +17,7 @@ class AutoSimSkillsExtraCfg:
     grasp: GraspSkillCfg = GraspSkillCfg()
     ungrasp: UngraspSkillCfg = UngraspSkillCfg()
     lift: LiftSkillCfg = LiftSkillCfg()
-    navigate: NavigateSkillCfg = NavigateSkillCfg()
+    moveto: NavigateSkillCfg = NavigateSkillCfg()
     press: PressSkillCfg = PressSkillCfg()
     pull: PullSkillCfg = PullSkillCfg()
     push: PushSkillCfg = PushSkillCfg()
