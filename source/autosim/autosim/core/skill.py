@@ -3,7 +3,12 @@ from abc import ABC, abstractmethod
 import torch
 from isaaclab.utils import configclass
 
-from .types import SkillGoal, SkillOutput, SkillStatus, WorldState
+from .types import SkillGoal, SkillInfo, SkillOutput, SkillStatus, WorldState
+
+
+@configclass
+class SkillExtraCfg:
+    """Extra configuration for the skill."""
 
 
 @configclass
@@ -14,10 +19,8 @@ class SkillCfg:
     """The name of the skill."""
     description: str = "Base skill class."
     """The description of the skill (for prompt generation)."""
-    required_modules: list[str] = []
-    """The required modules for the skill."""
-    extra_cfg: dict = {}
-    """The extra configuration for the skill."""
+    extra_cfg: SkillExtraCfg = SkillExtraCfg()
+    """The extra configuration for the skill (used in specific skill classes)."""
 
 
 class Skill(ABC):
@@ -26,12 +29,9 @@ class Skill(ABC):
     cfg: SkillCfg
     """The configuration of the skill."""
 
-    def __init__(self, extra_cfg: dict = {}) -> None:
+    def __init__(self, extra_cfg: SkillExtraCfg) -> None:
         self._status: SkillStatus = SkillStatus.IDLE
-        self.cfg.extra_cfg.update(extra_cfg)
-
-        # initialize dependent modules
-        self._init_modules()
+        self.cfg.extra_cfg = extra_cfg
 
     @classmethod
     def get_cfg(cls) -> SkillCfg:
@@ -63,13 +63,21 @@ class Skill(ABC):
         """
         raise NotImplementedError(f"{self.__class__.__name__}.step() must be implemented.")
 
+    @abstractmethod
+    def extract_goal_from_info(self, skill_info: SkillInfo) -> SkillGoal:
+        """Extract the goal from the skill information.
+
+        Args:
+            skill_info: The skill information.
+
+        Returns:
+            The goal of the skill.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__}.extract_goal_from_info() must be implemented.")
+
     def reset(self) -> None:
         """Reset the skill."""
         self._status = SkillStatus.IDLE
-
-    def _init_modules(self) -> None:
-        """Initialize the dependent modules."""
-        pass
 
     def __call__(self, state: WorldState, goal: SkillGoal) -> SkillOutput:
         """

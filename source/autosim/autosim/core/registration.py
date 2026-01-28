@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from autosim.core.pipeline import AutoSimPipeline as Pipeline
-    from autosim.core.skill import Skill
+    from autosim.core.skill import Skill, SkillExtraCfg
 
 
 # ============================================================================
@@ -169,7 +169,7 @@ def unregister_pipeline(id: str) -> None:
 #     SkillRegistry.register(MySkill)
 #
 #     # 3. Create a skill instance
-#     skill = SkillRegistry.create("reach", extra_cfg={"param": "value"})
+#     skill = SkillRegistry.create("reach", extra_cfg=SkillExtraCfg(param="value"))
 #
 #     # 4. List all registered skills
 #     skill_configs = SkillRegistry.list_skills()
@@ -211,8 +211,8 @@ class SkillRegistry:
         return cls._skills[name]
 
     @classmethod
-    def create(cls, name: str, extra_cfg: dict = {}) -> Skill:
-        """Create a skill instance from the registry."""
+    def create(cls, name: str, extra_cfg: SkillExtraCfg) -> Skill:
+        """Create a skill instance from the registry, extra_cfg will overwrite the default value in the skill configuration."""
         skill_cls = cls.get(name)
         return skill_cls(extra_cfg)
 
@@ -222,13 +222,11 @@ class SkillRegistry:
         return [skill_cls.get_cfg() for skill_cls in cls._skills.values()]
 
 
-def register_skill(name: str, description: str, required_modules: list[str] = []) -> type:
+def register_skill(name: str, description: str, cfg_type: type) -> type:
     """Decorator: Simplify skill definition."""
 
     def decorator(cls: type) -> type:
-        from autosim.core.skill import SkillCfg
-
-        cls.cfg = SkillCfg(name=name, description=description, required_modules=required_modules)
+        cls.cfg = cfg_type(name=name, description=description)
         SkillRegistry.register(cls)
         return cls
 

@@ -18,7 +18,6 @@ class PipelineOutput:
 """SKILL RELATED TYPES"""
 
 
-@dataclass
 class SkillStatus(Enum):
     """Status of the skill execution."""
 
@@ -93,17 +92,8 @@ class WorldState:
     """The end-effector pose of the robot. [x, y, z, qw, qx, qy, qz]"""
     sim_joint_names: list[str]
     """The joint names of the robot."""
-
     objects: dict[str, torch.Tensor] = field(default_factory=dict)
     """The state of the objects in the world."""
-
-    rgb: torch.Tensor | None = None
-    """The RGB image of the world."""
-    depth: torch.Tensor | None = None
-    """The depth image of the world."""
-    point_cloud: torch.Tensor | None = None
-    """The point cloud of the world."""
-
     metadata: dict[str, Any] = field(default_factory=dict)
     """The metadata of the world state."""
 
@@ -117,12 +107,6 @@ class WorldState:
         self.robot_joint_vel = self.robot_joint_vel.to(device)
         self.robot_ee_pose = self.robot_ee_pose.to(device)
         self.objects = {k: v.to(device) for k, v in self.objects.items()}
-        if self.rgb is not None:
-            self.rgb = self.rgb.to(device)
-        if self.depth is not None:
-            self.depth = self.depth.to(device)
-        if self.point_cloud is not None:
-            self.point_cloud = self.point_cloud.to(device)
         return self
 
 

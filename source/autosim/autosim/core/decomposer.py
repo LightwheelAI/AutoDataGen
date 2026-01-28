@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict
 from pathlib import Path
 
+from dacite import from_dict
 from isaaclab.utils import configclass
 
 from .types import DecomposeResult, EnvExtraInfo
@@ -44,4 +45,4 @@ class Decomposer(ABC):
         if not (self._cache_dir / f"{task_name}.json").exists():
             raise FileNotFoundError(f"Cache file not found for task name: {task_name} in storage: {self.cfg.cache_dir}")
         with open(self._cache_dir / f"{task_name}.json") as f:
-            return DecomposeResult(**json.load(f))
+            return from_dict(DecomposeResult, json.load(f))

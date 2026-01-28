@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dacite import from_dict
 from jinja2 import Environment, FileSystemLoader
 from openai import OpenAI
 
@@ -90,7 +91,7 @@ class LLMDecomposer(Decomposer):
             results = self._extract_json(response)
             self._validate_result(results)
 
-            return DecomposeResult(**results)
+            return from_dict(DecomposeResult, results)
         except json.JSONDecodeError as e:
             raise ValueError(f"Failed to parse JSON response: {e}\nResponse: {response}")
 

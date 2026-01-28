@@ -1,21 +1,38 @@
+from isaaclab.utils import configclass
+
 from autosim import register_skill
+from autosim.core.skill import SkillCfg
 
-from .base_skill import GripperSkillBase
+from .base_skill import GripperSkillBase, GripperSkillExtraCfg
 
 
-@register_skill(name="grasp", description="Grasp object (close gripper)")
+@configclass
+class GraspSkillCfg(SkillCfg):
+    """Configuration for the grasp skill."""
+
+    extra_cfg: GripperSkillExtraCfg = GripperSkillExtraCfg(gripper_value=-1.0)
+    """default configuration: close gripper[-1.0] for 10 steps"""
+
+
+@register_skill(name="grasp", cfg_type=GraspSkillCfg, description="Grasp object (close gripper)")
 class GraspSkill(GripperSkillBase):
     """Skill to grasp an object"""
 
-    def __init__(self, extra_cfg: dict = {}) -> None:
-        """default configuration: close gripper[-1.0] for 10 steps"""
-        super().__init__(extra_cfg, gripper_value=-1.0, duration=10)
+    def __init__(self, extra_cfg: GripperSkillExtraCfg) -> None:
+        super().__init__(extra_cfg)
 
 
-@register_skill(name="ungrasp", description="Release object (open gripper)")
+@configclass
+class UngraspSkillCfg(SkillCfg):
+    """Configuration for the ungrasp skill."""
+
+    extra_cfg: GripperSkillExtraCfg = GripperSkillExtraCfg(gripper_value=1.0)
+    """default configuration: open gripper[1.0] for 10 steps"""
+
+
+@register_skill(name="ungrasp", cfg_type=UngraspSkillCfg, description="Release object (open gripper)")
 class UngraspSkill(GripperSkillBase):
     """Skill to release an object"""
 
-    def __init__(self, extra_cfg: dict = {}) -> None:
-        """default configuration: open gripper[1.0] for 10 steps"""
-        super().__init__(extra_cfg, gripper_value=1.0, duration=10)
+    def __init__(self, extra_cfg: GripperSkillExtraCfg) -> None:
+        super().__init__(extra_cfg)

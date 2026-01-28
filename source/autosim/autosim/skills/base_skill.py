@@ -1,16 +1,29 @@
 import torch
+from isaaclab.utils import configclass
 
-from autosim.core.skill import Skill
+from autosim.capabilities.motion_planning import CuroboPlanner
+from autosim.core.skill import Skill, SkillExtraCfg
 from autosim.core.types import SkillGoal, SkillOutput, WorldState
+
+
+@configclass
+class GripperSkillExtraCfg(SkillExtraCfg):
+    """Extra configuration for the gripper skill."""
+
+    gripper_value: float = 0.0
+    """The value of the gripper."""
+    duration: int = 10
+    """The duration of the gripper."""
 
 
 class GripperSkillBase(Skill):
     """Base class for gripper skills open/close skills."""
 
-    def __init__(self, extra_cfg: dict = {}, gripper_value: float = 0.0, duration: int = 10) -> None:
+    def __init__(self, extra_cfg: GripperSkillExtraCfg) -> None:
         super().__init__(extra_cfg)
-        self._gripper_value = extra_cfg.get("gripper_value", gripper_value)
-        self._duration = extra_cfg.get("duration", duration)
+
+        self._gripper_value = extra_cfg.gripper_value
+        self._duration = extra_cfg.duration
         self._step_count = 0
         self._target_object_name = None
 
@@ -31,12 +44,16 @@ class GripperSkillBase(Skill):
         )
 
 
+@configclass
+class CuroboSkillExtraCfg(SkillExtraCfg):
+    """Extra configuration for the curobo skill."""
+
+    curobo_planner: CuroboPlanner | None = None
+
+
 class CuroboSkillBase(Skill):
     """Base class for skills dependent on curobo."""
 
-    def __init__(self, extra_cfg: dict = {}) -> None:
+    def __init__(self, extra_cfg: CuroboSkillExtraCfg) -> None:
         super().__init__(extra_cfg)
-
-    def _init_modules(self) -> None:
-        # curobo related modules
-        pass
+        self._planner = extra_cfg.curobo_planner
