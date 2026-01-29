@@ -13,6 +13,8 @@ class PipelineOutput:
 
     success: bool
     """Whether the pipeline execution was successful."""
+    generated_actions: list[torch.Tensor]
+    """The generated actions of the pipeline."""
 
 
 """SKILL RELATED TYPES"""
@@ -78,6 +80,10 @@ class EnvExtraInfo:
     """The objects in the environment."""
     additional_prompt_contents: str | None = None
     """The additional prompt contents for the task decomposition."""
+    robot_name: str = "robot"
+    """The name of the robot in the scene."""
+    ee_link_name: str = "ee_link"
+    """The name of the end-effector link."""
 
 
 @dataclass
@@ -89,7 +95,9 @@ class WorldState:
     robot_joint_vel: torch.Tensor
     """The joint velocities of the robot."""
     robot_ee_pose: torch.Tensor
-    """The end-effector pose of the robot. [x, y, z, qw, qx, qy, qz]"""
+    """The end-effector pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
+    robot_base_pose: torch.Tensor
+    """The base pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
     sim_joint_names: list[str]
     """The joint names of the robot."""
     objects: dict[str, torch.Tensor] = field(default_factory=dict)
@@ -199,3 +207,36 @@ class DecomposeResult:
     """The total number of steps in the task."""
     skill_sequence: list[str]
     """The sequence of skills in the task."""
+
+
+"""NAVIGATION RELATED TYPES"""
+
+
+@dataclass
+class MapBounds:
+    """Bounds of the map. [min_x, max_x, min_y, max_y]"""
+
+    min_x: float
+    """The minimum x-coordinate of the map."""
+    max_x: float
+    """The maximum x-coordinate of the map."""
+    min_y: float
+    """The minimum y-coordinate of the map."""
+    max_y: float
+    """The maximum y-coordinate of the map."""
+
+
+@dataclass
+class OccupancyMap:
+    """Occupancy map of the environment."""
+
+    occupancy_map: torch.Tensor
+    """The occupancy map of the environment. 2D array of shape [height, width] 0: free, 1: occupied, -1: unknown."""
+    resolution: float
+    """The resolution of the occupancy map, cell size in meters."""
+    origin: tuple[float, float, float]
+    """The origin of the occupancy map, (x, y)."""
+    map_bounds: MapBounds
+    """The bounds of the occupancy map."""
+    floor_bounds: MapBounds
+    """The bounds of the floor."""
