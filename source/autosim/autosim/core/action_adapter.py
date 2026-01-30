@@ -13,7 +13,7 @@ from .types import SkillOutput
 class ApplyMethodProtocol(Protocol):
     """Protocol for apply methods - fixed signature that users must follow."""
 
-    def __call__(self, skill: Skill, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
+    def __call__(self, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
         """Apply method signature - fixed parameters."""
         ...
 
@@ -34,7 +34,7 @@ class ActionAdapterBase:
     Users should define instance methods and register them using `register_apply_method()`.
     All apply methods must follow this fixed signature:
 
-        def method_name(self, skill: Skill, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor
+        def method_name(self, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor
 
     Example:
         >>> class MyActionAdapter(ActionAdapterBase):
@@ -42,7 +42,7 @@ class ActionAdapterBase:
         >>>        super().__init__(cfg)
         >>>        self.register_apply_method("grasp", self.handle_grasp)
 
-        >>>    def handle_grasp(self, skill: Skill, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
+        >>>    def handle_grasp(self, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
         >>>        # Your implementation here
         >>>        ...
     """
@@ -85,19 +85,18 @@ class ActionAdapterBase:
 
         skill_type = skill.cfg.name
         if skill_type in self._apply_map:
-            return self._apply_map[skill_type](skill, skill_output, env)
+            return self._apply_map[skill_type](skill_output, env)
         else:
-            return self._default_apply(skill, skill_output, env)
+            return self._default_apply(skill_output, env)
 
-    def _default_apply(self, skill: Skill, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
+    def _default_apply(self, skill_output: SkillOutput, env: ManagerBasedEnv) -> torch.Tensor:
         """
         Default apply method for the skill.
 
         Args:
-            skill: The skill instance.
             skill_output: The output of the skill.
             env: The environment.
         """
 
-        print(f"[WARNING] Action adapter for skill {skill.cfg.name} not implemented. Using default apply.")
+        print("[WARNING] Action adapter for skill not implemented. Using default apply.")
         return skill_output.action

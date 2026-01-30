@@ -1,8 +1,9 @@
 from isaaclab.utils import configclass
 
+from .base_skill import CuroboSkillExtraCfg
 from .gripper import GraspSkill, GraspSkillCfg, UngraspSkill, UngraspSkillCfg
 from .lift import LiftSkill, LiftSkillCfg
-from .navigate import NavigateSkill, NavigateSkillCfg
+from .navigate import NavigateSkill, NavigateSkillCfg, NavigateSkillExtraCfg
 from .press import PressSkill, PressSkillCfg
 from .pull import PullSkill, PullSkillCfg
 from .push import PushSkill, PushSkillCfg
