@@ -223,15 +223,6 @@ class CuroboPlanner:
                 link_name: Pose(position=self._to_curobo_device(pose[:3]), quaternion=self._to_curobo_device(pose[3:]))
                 for link_name, pose in link_goals.items()
             }
-        elif self.cfg.maintain_other_ee_poses:
-            # Automatically maintain current poses for other end-effectors
-            kin_state = self.motion_gen.compute_kinematics(current_joint_state)
-            link_poses = {}
-            ee_link = self.motion_gen.kinematics.ee_link
-            for link_name in self.motion_gen.kinematics.link_names:
-                if link_name != ee_link:
-                    link_poses[link_name] = kin_state.link_poses[link_name]
-                    self._logger.debug(f"Maintaining current pose for link: {link_name}")
 
         # execute planning
         result = self.motion_gen.plan_single(

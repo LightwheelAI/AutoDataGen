@@ -47,9 +47,6 @@ class CuroboPlannerCfg:
     time_dilation_factor: float = 0.5
     """Time dilation factor for planning."""
 
-    maintain_other_ee_poses: bool = True
-    """Whether to maintain other end-effector poses when no link_goals are provided (useful for dual-arm robots)."""
-
     # Optional prim path configuration
     robot_prim_path: str | None = None
     """Absolute USD prim path to the robot root for world extraction; None derives it from environment root."""
