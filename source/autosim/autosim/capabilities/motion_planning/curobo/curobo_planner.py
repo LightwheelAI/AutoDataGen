@@ -46,7 +46,7 @@ class CuroboPlanner:
 
         # Initialize logger
         log_level = logging.DEBUG if self.cfg.debug_planner else logging.INFO
-        self.logger = AutoSimLogger("CuroboPlanner", log_level)
+        self._logger = AutoSimLogger("CuroboPlanner", log_level)
         setup_curobo_logger("warn")
 
         # Configuration operations
@@ -89,7 +89,7 @@ class CuroboPlanner:
         self.usd_helper.load_stage(env.scene.stage)
 
         # Warm up planner
-        self.logger.info("Warming up motion planner...")
+        self._logger.info("Warming up motion planner...")
         self.motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
 
         # Read static world geometry once
@@ -106,10 +106,10 @@ class CuroboPlanner:
         if torch.cuda.is_available():
             idx = self.cfg.cuda_device if self.cfg.cuda_device is not None else torch.cuda.current_device()
             self.tensor_args = TensorDeviceType(device=torch.device(f"cuda:{idx}"), dtype=torch.float32)
-            self.logger.debug(f"cuRobo motion planner initialized on CUDA device {idx}")
+            self._logger.debug(f"cuRobo motion planner initialized on CUDA device {idx}")
         else:
             self.tensor_args = TensorDeviceType()
-            self.logger.warning("CUDA not available, cuRobo using CPU - this may cause device compatibility issues")
+            self._logger.warning("CUDA not available, cuRobo using CPU - this may cause device compatibility issues")
 
         # refine interpolation dt
         self.cfg.interpolation_dt = env.cfg.sim.dt * env.cfg.decimation
@@ -118,7 +118,7 @@ class CuroboPlanner:
         """Load robot configuration from file or dictionary."""
 
         if isinstance(self.cfg.robot_config_file, str):
-            self.logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
+            self._logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
 
             content_path = ContentPath(
                 robot_config_root_path=self.cfg.curobo_config_path,
@@ -131,7 +131,7 @@ class CuroboPlanner:
 
             return robot_cfg
         else:
-            self.logger.info("Using custom robot configuration dictionary.")
+            self._logger.info("Using custom robot configuration dictionary.")
 
             return self.cfg.robot_config_file
 
@@ -231,7 +231,7 @@ class CuroboPlanner:
             for link_name in self.motion_gen.kinematics.link_names:
                 if link_name != ee_link:
                     link_poses[link_name] = kin_state.link_poses[link_name]
-                    self.logger.debug(f"Maintaining current pose for link: {link_name}")
+                    self._logger.debug(f"Maintaining current pose for link: {link_name}")
 
         # execute planning
         result = self.motion_gen.plan_single(
@@ -245,10 +245,10 @@ class CuroboPlanner:
             current_plan = result.get_interpolated_plan()
             motion_plan = current_plan.get_ordered_joint_state(self.target_joint_names)
 
-            self.logger.debug(f"planning succeeded with {len(motion_plan.position)} waypoints")
+            self._logger.debug(f"planning succeeded with {len(motion_plan.position)} waypoints")
             return motion_plan
         else:
-            self.logger.warning(f"planning failed: {result.status}")
+            self._logger.warning(f"planning failed: {result.status}")
             return None
 
     def reset(self):

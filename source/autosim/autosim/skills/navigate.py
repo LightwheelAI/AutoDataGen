@@ -6,6 +6,7 @@ from scipy.ndimage import distance_transform_edt
 
 from autosim import register_skill
 from autosim.capabilities.navigation import AStarPlannerCfg, DWAPlannerCfg
+from autosim.core.logger import AutoSimLogger
 from autosim.core.skill import Skill, SkillCfg, SkillExtraCfg
 from autosim.core.types import (
     EnvExtraInfo,
@@ -58,6 +59,8 @@ class NavigateSkill(Skill):
 
     def __init__(self, extra_cfg: NavigateSkillExtraCfg) -> None:
         super().__init__(extra_cfg)
+
+        self._logger = AutoSimLogger("NavigateSkill")
 
         self._occupancy_map = extra_cfg.occupancy_map
         self._global_planner = extra_cfg.global_planner.class_type(extra_cfg.global_planner, self._occupancy_map)
@@ -120,10 +123,7 @@ class NavigateSkill(Skill):
 
         # if no target position is found, use the default fallback position
         if target_pos_candidate is None:
-            print(
-                f"[NavigateSkill.extract_goal_from_info] Warning: Map sampling failed for {target_object_name}. Using"
-                " default offset."
-            )
+            self._logger.warning(f"Map sampling failed for {target_object_name}. Using default offset.")
 
             target_x = obj_pos_w[0]
             target_y = obj_pos_w[1] - 1.0
@@ -154,18 +154,18 @@ class NavigateSkill(Skill):
         self._target_yaw = target_yaw
         self._target_pos = goal_pos
 
-        print(
-            f"[NavigateSkill.execute_plan] Planning from ({start_pos[0]:.2f}, {start_pos[1]:.2f}) to"
-            f" ({goal_pos[0]:.2f}, {goal_pos[1]:.2f}), target_yaw={target_yaw:.2f}"
+        self._logger.info(
+            f"Planning from ({start_pos[0]:.2f}, {start_pos[1]:.2f}) to ({goal_pos[0]:.2f}, {goal_pos[1]:.2f}),"
+            f" target_yaw={target_yaw:.2f}."
         )
 
         self._global_path = self._global_planner.plan(start_pos, goal_pos)
 
         if self._global_path is None:
-            print("[NavigateSkill.execute_plan] Global planning failed")
+            self._logger.error("Global planning failed.")
             return False
 
-        print(f"[NavigateSkill.execute_plan] Global path planned: {len(self._global_path)} waypoints")
+        self._logger.info(f"Global path planned: {len(self._global_path)} waypoints.")
         return True
 
     def step(self, state: WorldState) -> SkillOutput:

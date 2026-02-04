@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from scipy.ndimage import distance_transform_edt
 
+from autosim.core.logger import AutoSimLogger
+
 if TYPE_CHECKING:
     from autosim.core.types import OccupancyMap
 
@@ -22,6 +24,8 @@ class AStarPlanner:
         self._cfg = cfg
         self._occupancy_map = occupancy_map
         self._device = self._occupancy_map.occupancy_map.device
+
+        self._logger = AutoSimLogger("AStarPlanner")
 
         free_space = (self._occupancy_map.occupancy_map == 0).cpu().numpy()
         self._distance_field = distance_transform_edt(free_space) * self._occupancy_map.resolution
@@ -50,10 +54,10 @@ class AStarPlanner:
 
         # Check bounds
         if not self._is_valid_grid_pos(start_grid, grid.shape):
-            print(f"[AStarPlanner] Start position {start[:2]} -> grid {start_grid} is out of bounds {grid.shape}")
+            self._logger.warning(f"Start position {start[:2]} -> grid {start_grid} is out of bounds {grid.shape}")
             return None
         if not self._is_valid_grid_pos(goal_grid, grid.shape):
-            print(f"[AStarPlanner] Goal position {goal[:2]} -> grid {goal_grid} is out of bounds {grid.shape}")
+            self._logger.warning(f"Goal position {goal[:2]} -> grid {goal_grid} is out of bounds {grid.shape}")
             return None
 
         # A* search
@@ -113,10 +117,10 @@ class AStarPlanner:
 
         # Check if start or goal is in obstacle
         if grid[start_tuple[0], start_tuple[1]] == 1:
-            print(f"[AStarPlanner] Start position is in obstacle {start_tuple}")
+            self._logger.warning(f"Start position is in obstacle {start_tuple}")
             return None
         if grid[goal_tuple[0], goal_tuple[1]] == 1:
-            print(f"[AStarPlanner] Goal position is in obstacle {goal_tuple}")
+            self._logger.warning(f"Goal position is in obstacle {goal_tuple}")
             return None
 
         # Priority queue: (f_score, counter, position, g_score)
@@ -181,7 +185,7 @@ class AStarPlanner:
                     counter += 1
                     heapq.heappush(heap, (f_score, counter, next_tuple, tentative_g))
 
-        print(f"[AStarPlanner] No path found from {start} to {goal}")
+        self._logger.warning(f"No path found from {start} to {goal}")
         return None  # No path found
 
     def _simplify_path(self, path: list[np.ndarray]) -> list[np.ndarray]:

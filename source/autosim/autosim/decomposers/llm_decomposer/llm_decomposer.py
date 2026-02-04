@@ -79,9 +79,9 @@ class LLMDecomposer(Decomposer):
 
         task_code = self._load_task_code(extra_info.task_name)
         prompt = self._build_prompt(task_code, extra_info)
-        print("prompt for llm composer: \n", prompt)
+        self._logger.debug(f"prompt for llm composer: \n{prompt}")
 
-        print("generate response from llm...")
+        self._logger.info("generate response from llm...")
         response = self._llm_backend.generate(
             prompt=prompt, temperature=self.cfg.temperature, max_tokens=self.cfg.max_tokens
         )

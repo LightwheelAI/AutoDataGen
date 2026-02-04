@@ -5,6 +5,7 @@ import torch
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils import configclass
 
+from autosim.core.logger import AutoSimLogger
 from autosim.core.skill import Skill
 
 from .types import SkillOutput
@@ -54,6 +55,7 @@ class ActionAdapterBase:
         self.cfg = cfg
         self._apply_map: dict[str, ApplyMethodProtocol] = {}
         self._skip_apply_skills = self.cfg.skip_apply_skills
+        self._logger = AutoSimLogger("ActionAdapter")
 
     def register_apply_method(self, skill_name: str, method: ApplyMethodProtocol) -> None:
         """Register an apply method for a specific skill."""
@@ -98,5 +100,5 @@ class ActionAdapterBase:
             env: The environment.
         """
 
-        print("[WARNING] Action adapter for skill not implemented. Using default apply.")
+        self._logger.warning("Action adapter for skill not implemented. Using default apply.")
         return skill_output.action

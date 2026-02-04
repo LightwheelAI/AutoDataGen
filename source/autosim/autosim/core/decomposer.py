@@ -6,6 +6,8 @@ from pathlib import Path
 from dacite import from_dict
 from isaaclab.utils import configclass
 
+from autosim.core.logger import AutoSimLogger
+
 from .types import DecomposeResult, EnvExtraInfo
 
 
@@ -25,6 +27,7 @@ class Decomposer(ABC):
         self.cfg = cfg
         self._cache_dir = Path(self.cfg.cache_dir).expanduser()
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._logger = AutoSimLogger("Decomposer")
 
     @abstractmethod
     def decompose(self, extra_info: EnvExtraInfo) -> DecomposeResult:

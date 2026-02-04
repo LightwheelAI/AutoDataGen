@@ -8,7 +8,10 @@ from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils import configclass
 from pxr import Usd, UsdGeom
 
+from autosim.core.logger import AutoSimLogger
 from autosim.core.types import MapBounds, OccupancyMap
+
+_logger = AutoSimLogger("OccupancyMap")
 
 
 @configclass
@@ -49,7 +52,7 @@ def _get_prim_bounds(stage, prim_path: str, verbose: bool = True) -> tuple[np.nd
     max_point = aligned_box.GetMax()
 
     if verbose:
-        print(f"[OccupancyMap] Prim '{prim_path}' bounds: min={list(min_point)}, max={list(max_point)}")
+        _logger.info(f"Prim '{prim_path}' bounds: min={list(min_point)}, max={list(max_point)}")
 
     return np.array([min_point[0], min_point[1], min_point[2]]), np.array([max_point[0], max_point[1], max_point[2]])
 
@@ -155,14 +158,14 @@ def get_occupancy_map(env: ManagerBasedEnv, cfg: OccupancyMapCfg) -> OccupancyMa
 
     # Clamp map size to prevent memory issues
     if map_width > cfg.max_map_size or map_height > cfg.max_map_size:
-        print(f"[OccupancyMap] Warning: Map size {map_width}x{map_height} exceeds max {cfg.max_map_size}")
+        _logger.warning(f"Map size {map_width}x{map_height} exceeds max {cfg.max_map_size}")
         new_cell_size = max((map_max_x - map_min_x) / cfg.max_map_size, (map_max_y - map_min_y) / cfg.max_map_size)
-        print(f"[OccupancyMap] Adjusting cell_size from {cfg.cell_size:.3f}m to {new_cell_size:.3f}m")
+        _logger.info(f"Adjusting cell_size from {cfg.cell_size:.3f}m to {new_cell_size:.3f}m")
         cfg.cell_size = new_cell_size
         map_width = int((map_max_x - map_min_x) / cfg.cell_size) + 1
         map_height = int((map_max_y - map_min_y) / cfg.cell_size) + 1
-    print(
-        f"[OccupancyMap] Generating map: {map_width}x{map_height} cells, bounds: x=[{map_min_x:.2f}, {map_max_x:.2f}],"
+    _logger.info(
+        f"Generating map: {map_width}x{map_height} cells, bounds: x=[{map_min_x:.2f}, {map_max_x:.2f}],"
         f" y=[{map_min_y:.2f}, {map_max_y:.2f}]"
     )
 
@@ -172,13 +175,13 @@ def get_occupancy_map(env: ManagerBasedEnv, cfg: OccupancyMapCfg) -> OccupancyMa
     # Calculate height range for sampling
     sample_height_min = min_bound[2] + cfg.sample_height - cfg.height_tolerance
     sample_height_max = min_bound[2] + cfg.sample_height + cfg.height_tolerance
-    print(f"[OccupancyMap] Sampling height range: [{sample_height_min:.2f}, {sample_height_max:.2f}]")
+    _logger.info(f"Sampling height range: [{sample_height_min:.2f}, {sample_height_max:.2f}]")
 
     # Collect collision primitives
     collision_prims = _collect_collision_prims(
         stage, floor_prim_path, sample_height_min, sample_height_max, cfg.min_xy_extent
     )
-    print(f"[OccupancyMap] Found {len(collision_prims)} collision primitives")
+    _logger.info(f"Found {len(collision_prims)} collision primitives")
 
     # Mark occupied cells
     for prim_info in collision_prims:
