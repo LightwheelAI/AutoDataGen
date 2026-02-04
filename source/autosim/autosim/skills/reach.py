@@ -4,6 +4,7 @@ from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils import configclass
 
 from autosim import register_skill
+from autosim.core.logger import AutoSimLogger
 from autosim.core.skill import SkillCfg
 from autosim.core.types import (
     EnvExtraInfo,
@@ -34,6 +35,8 @@ class ReachSkill(CuroboSkillBase):
 
     def __init__(self, extra_cfg: CuroboSkillExtraCfg) -> None:
         super().__init__(extra_cfg)
+
+        self._logger = AutoSimLogger("ReachSkill")
 
         # variables for the skill execution
         self._trajectory = None
@@ -79,6 +82,8 @@ class ReachSkill(CuroboSkillBase):
         reach_target_pos_in_env, reach_target_quat_in_env = PoseUtils.combine_frame_transforms(
             object_pos_in_env, object_quat_in_env, reach_target_pos_in_object, reach_target_quat_in_object
         )
+        self._logger.info(f"Reach target position in environment: {reach_target_pos_in_env}")
+        self._logger.info(f"Reach target quaternion in environment: {reach_target_quat_in_env}")
 
         robot_root_pose_in_env = robot.data.root_pose_w
         robot_root_pos_in_env, robot_root_quat_in_env = robot_root_pose_in_env[:, :3], robot_root_pose_in_env[:, 3:]
