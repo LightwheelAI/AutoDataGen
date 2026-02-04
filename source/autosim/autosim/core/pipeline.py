@@ -132,7 +132,7 @@ class AutoSimPipeline(ABC):
         """Execute the skill sequence."""
 
         self._check_skill_extra_cfg()
-        # self._env.reset()
+        self._env.reset()
         for subtask in decompose_result.subtasks:
             for skill_info in subtask.skills:
 
