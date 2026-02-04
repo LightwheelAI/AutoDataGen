@@ -288,4 +288,5 @@ class NavigateSkill(Skill):
     def _normalize_angle(self, angle: float) -> float:
         """Normalize angle to [-pi, pi]"""
 
-        return float(torch.remainder(torch.tensor(angle) + np.pi, 2 * np.pi) - np.pi)
+        angle_tensor = torch.as_tensor(angle)
+        return float(torch.remainder(angle_tensor + np.pi, 2 * np.pi) - np.pi)

@@ -4,7 +4,13 @@ from isaaclab.utils import configclass
 
 from autosim.capabilities.motion_planning import CuroboPlanner
 from autosim.core.skill import Skill, SkillExtraCfg
-from autosim.core.types import SkillGoal, SkillInfo, SkillOutput, WorldState
+from autosim.core.types import (
+    EnvExtraInfo,
+    SkillGoal,
+    SkillInfo,
+    SkillOutput,
+    WorldState,
+)
 
 
 @configclass
@@ -28,12 +34,31 @@ class GripperSkillBase(Skill):
         self._step_count = 0
         self._target_object_name = None
 
-    def plan(self, state: WorldState, goal: SkillGoal) -> bool:
+    def extract_goal_from_info(
+        self, skill_info: SkillInfo, env: ManagerBasedEnv, env_extra_info: EnvExtraInfo
+    ) -> SkillGoal:
+        """Return the target object name."""
+
+        return SkillGoal(target_object=skill_info.target_object)
+
+    def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
+        """Execute the plan of the gripper skill."""
+
         self._target_object_name = goal.target_object
         self._step_count = 0
         return True
 
     def step(self, state: WorldState) -> SkillOutput:
+        """Step the gripper skill.
+
+        Args:
+            state: The current state of the world.
+
+        Returns:
+            The output of the skill execution.
+                action: The action to be applied to the environment. [gripper_value]
+        """
+
         done = self._step_count >= self._duration
         self._step_count += 1
 
@@ -44,10 +69,9 @@ class GripperSkillBase(Skill):
             info={"step": self._step_count, "target_object": self._target_object_name},
         )
 
-    def extract_goal_from_info(self, skill_info: SkillInfo, env: ManagerBasedEnv) -> SkillGoal:
-        return SkillGoal(target_object=skill_info.target_object)
-
     def reset(self) -> None:
+        """Reset the gripper skill."""
+
         super().reset()
         self._step_count = 0
         self._target_object_name = None
@@ -58,6 +82,7 @@ class CuroboSkillExtraCfg(SkillExtraCfg):
     """Extra configuration for the curobo skill."""
 
     curobo_planner: CuroboPlanner | None = None
+    """The curobo planner for the skill."""
 
 
 class CuroboSkillBase(Skill):

@@ -255,3 +255,12 @@ class CuroboPlanner:
         """reset the planner state"""
 
         self.motion_gen.reset()
+
+    def get_ee_pose(self, current_q: torch.Tensor) -> Pose:
+        """Get the end-effector pose of the robot."""
+
+        current_joint_state = JointState(
+            position=self._to_curobo_device(current_q), joint_names=self.target_joint_names
+        )
+        kin_state = self.motion_gen.compute_kinematics(current_joint_state)
+        return kin_state.link_poses[self.motion_gen.kinematics.ee_link]
