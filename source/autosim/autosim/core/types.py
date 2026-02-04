@@ -84,6 +84,10 @@ class EnvExtraInfo:
 
     object_reach_target_poses: dict[str, list[torch.Tensor]] = field(default_factory=dict)
     """The reach target poses in the objects frame. each object can have multiple reach target poses [x, y, z, qw, qx, qy, qz]."""
+    object_extra_reach_target_poses: dict[str, dict[str, list[torch.Tensor]]] = field(default_factory=dict)
+    """The extra reach target poses in the objects frame. each object can have multiple extra reach target poses [x, y, z, qw, qx, qy, qz] with ee_name as the key.
+    For example, object_extra_reach_target_poses = {"obj": {"ee_1": [x, y, z, qw, qx, qy, qz]}}.
+    """
 
 
 @dataclass
@@ -95,7 +99,7 @@ class WorldState:
     robot_joint_vel: torch.Tensor
     """The joint velocities of the robot."""
     robot_ee_pose: torch.Tensor
-    """The end-effector pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
+    """The end - effector pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
     robot_base_pose: torch.Tensor
     """The base pose of the robot in the world frame. [x, y, yaw]"""
     sim_joint_names: list[str]
@@ -217,13 +221,13 @@ class MapBounds:
     """Bounds of the map. [min_x, max_x, min_y, max_y]"""
 
     min_x: float
-    """The minimum x-coordinate of the map."""
+    """The minimum x - coordinate of the map."""
     max_x: float
-    """The maximum x-coordinate of the map."""
+    """The maximum x - coordinate of the map."""
     min_y: float
-    """The minimum y-coordinate of the map."""
+    """The minimum y - coordinate of the map."""
     max_y: float
-    """The maximum y-coordinate of the map."""
+    """The maximum y - coordinate of the map."""
 
 
 @dataclass
@@ -231,7 +235,7 @@ class OccupancyMap:
     """Occupancy map of the environment."""
 
     occupancy_map: torch.Tensor
-    """The occupancy map of the environment. 2D array of shape [height, width] 0: free, 1: occupied, -1: unknown."""
+    """The occupancy map of the environment. 2D array of shape[height, width] 0: free, 1: occupied, -1: unknown."""
     resolution: float
     """The resolution of the occupancy map, cell size in meters."""
     origin: tuple[float, float]

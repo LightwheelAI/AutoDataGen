@@ -94,7 +94,28 @@ class ReachSkill(CuroboSkillBase):
 
         target_pose = torch.cat((reach_target_pos_in_robot_root, reach_target_quat_in_robot_root), dim=-1).squeeze(0)
 
-        return SkillGoal(target_object=target_object, target_pose=target_pose)
+        if target_object in env_extra_info.object_extra_reach_target_poses.keys():
+            extra_target_poses = {}
+            for ee_name, ee_target_pose in env_extra_info.object_extra_reach_target_poses[target_object].items():
+                ee_target_pose = torch.as_tensor(ee_target_pose, device=env.device)
+                extra_target_pos_in_obj, extra_target_quat_in_obj = ee_target_pose[:3].unsqueeze(0), ee_target_pose[
+                    3:
+                ].unsqueeze(0)
+                extra_target_pos_in_env, extra_target_quat_in_env = PoseUtils.combine_frame_transforms(
+                    object_pos_in_env, object_quat_in_env, extra_target_pos_in_obj, extra_target_quat_in_obj
+                )
+                self._logger.info(f"Extra target position for {ee_name} in environment: {extra_target_pos_in_env}")
+                self._logger.info(f"Extra target quaternion for {ee_name} in environment: {extra_target_quat_in_env}")
+                extra_target_pos_in_robot_root, extra_target_quat_in_robot_root = PoseUtils.subtract_frame_transforms(
+                    robot_root_pos_in_env, robot_root_quat_in_env, extra_target_pos_in_env, extra_target_quat_in_env
+                )
+                extra_target_poses[ee_name] = torch.cat(
+                    (extra_target_pos_in_robot_root, extra_target_quat_in_robot_root), dim=-1
+                ).squeeze(0)
+        else:
+            extra_target_poses = None
+
+        return SkillGoal(target_object=target_object, target_pose=target_pose, extra_target_poses=extra_target_poses)
 
     def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
         """Execute the plan of the reach skill."""
@@ -123,6 +144,7 @@ class ReachSkill(CuroboSkillBase):
             target_quat,
             activate_q,
             activate_qd,
+            link_goals=goal.extra_target_poses,
         )
 
         return self._trajectory is not None

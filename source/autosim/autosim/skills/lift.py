@@ -20,7 +20,7 @@ from .reach import ReachSkill
 class LiftSkillExtraCfg(CuroboSkillExtraCfg):
     """Extra configuration for the lift skill."""
 
-    lift_offset: float = 0.2
+    lift_offset: float = 0.1
     """The offset to lift the end-effector."""
 
 
