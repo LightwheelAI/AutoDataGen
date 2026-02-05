@@ -100,6 +100,7 @@ class AStarPlanner:
         Returns:
             world_pos: numpy array [x, y] in world frame.
         """
+
         row, col = int(pos[0]), int(pos[1])
         x = self._occupancy_map.origin[0] + (col + 0.5) * self._occupancy_map.resolution
         y = self._occupancy_map.origin[1] + (row + 0.5) * self._occupancy_map.resolution
@@ -112,6 +113,7 @@ class AStarPlanner:
 
     def _astar_search(self, grid: np.ndarray, start: np.ndarray, goal: np.ndarray) -> list[np.ndarray] | None:
         """A* search algorithm with distance field guidance"""
+
         start_tuple = tuple(start)
         goal_tuple = tuple(goal)
 
@@ -190,6 +192,7 @@ class AStarPlanner:
 
     def _simplify_path(self, path: list[np.ndarray]) -> list[np.ndarray]:
         """Simplify path by removing redundant waypoints"""
+
         if len(path) <= 2:
             return path
 

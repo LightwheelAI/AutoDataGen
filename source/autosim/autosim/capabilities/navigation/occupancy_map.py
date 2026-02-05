@@ -40,6 +40,7 @@ def _get_prim_bounds(stage, prim_path: str, verbose: bool = True) -> tuple[np.nd
     Returns:
         min_bound, max_bound
     """
+
     prim = stage.GetPrimAtPath(prim_path)
 
     # Get bounding box
@@ -61,6 +62,7 @@ def _collect_collision_prims(
     stage, floor_prim_path: str, sample_height_min: float, sample_height_max: float, min_xy_extent: float = 0.01
 ) -> list:
     """Collect collision primitives from the scene"""
+
     collision_prims = []
     bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), includedPurposes=[UsdGeom.Tokens.default_])
 

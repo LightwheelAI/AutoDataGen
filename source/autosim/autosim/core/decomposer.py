@@ -32,6 +32,7 @@ class Decomposer(ABC):
     @abstractmethod
     def decompose(self, extra_info: EnvExtraInfo) -> DecomposeResult:
         """Decompose the task with the given extra information."""
+
         raise NotImplementedError(f"{self.__class__.__name__}.decompose() must be implemented.")
 
     def is_cache_hit(self, task_name: str) -> bool:
@@ -40,11 +41,13 @@ class Decomposer(ABC):
 
     def write_cache(self, task_name: str, decompose_result: DecomposeResult) -> None:
         """Write the cache for the given task name."""
+
         with open(self._cache_dir / f"{task_name}.json", "w") as f:
             json.dump(asdict(decompose_result), f, indent=4)
 
     def read_cache(self, task_name: str) -> DecomposeResult:
         """Read the cache for the given task name."""
+
         if not (self._cache_dir / f"{task_name}.json").exists():
             raise FileNotFoundError(f"Cache file not found for task name: {task_name} in storage: {self.cfg.cache_dir}")
         with open(self._cache_dir / f"{task_name}.json") as f:

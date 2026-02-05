@@ -37,6 +37,7 @@ class LLMBackend:
                 - DeepSeek: deepseek-chat, deepseek-reasoner
                 - Claude: claude-3-5-sonnet-20241022, etc.
         """
+
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
 
@@ -52,6 +53,7 @@ class LLMBackend:
         Returns:
             Generated text
         """
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -105,6 +107,7 @@ class LLMDecomposer(Decomposer):
         Returns:
             The task code.
         """
+
         module_path, class_name = self._find_task_in_gym_registry(task_name)
         if module_path is None or class_name is None:
             raise ValueError(f"Task {task_name} not found in gymnasium registry")
@@ -137,6 +140,7 @@ class LLMDecomposer(Decomposer):
         Returns:
             Tuple of (module_path, class_name) or (None, None) if not found
         """
+
         import gymnasium as gym
 
         for task_spec in gym.registry.values():
@@ -179,6 +183,7 @@ class LLMDecomposer(Decomposer):
         Returns:
             Parsed JSON dictionary
         """
+
         # Try direct parsing
         with contextlib.suppress(json.JSONDecodeError):
             return json.loads(response)
@@ -207,6 +212,7 @@ class LLMDecomposer(Decomposer):
         Raises:
             ValueError: If validation fails
         """
+
         # Check required fields
         required_fields = [
             "task_name",

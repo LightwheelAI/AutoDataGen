@@ -11,31 +11,30 @@ if TYPE_CHECKING:
     from autosim.core.skill import Skill, SkillExtraCfg
 
 
-# ============================================================================
-# Pipeline Registration System
-# ============================================================================
-# This section provides the registration and instantiation system for
-# pipelines. Pipelines can be registered with an ID and entry points, then
-# created using make_pipeline().
-#
-# Usage:
-#     # 1. Register a pipeline
-#     register_pipeline(
-#         id="MyPipeline-v0",
-#         entry_point="autosim.pipelines:MyPipeline",
-#         cfg_entry_point="autosim.pipelines:MyPipelineCfg",
-#     )
-#
-#     # 2. Create a pipeline instance
-#     pipeline = make_pipeline("MyPipeline-v0")
-#     pipeline.run()
-#
-#     # 3. List all registered pipelines
-#     pipeline_ids = list_pipelines()
-#
-#     # 4. Unregister a pipeline
-#     unregister_pipeline("MyPipeline-v0")
-# ============================================================================
+"""Pipeline Registration System
+
+This section provides the registration and instantiation system for
+pipelines. Pipelines can be registered with an ID and entry points, then
+created using make_pipeline().
+
+Usage:
+    # 1. Register a pipeline
+    >>> register_pipeline(
+    >>>     id="MyPipeline-v0",
+    >>>     entry_point="autosim.pipelines:MyPipeline",
+    >>>     cfg_entry_point="autosim.pipelines:MyPipelineCfg",
+    >>> )
+
+    # 2. Create a pipeline instance
+    >>> pipeline = make_pipeline("MyPipeline-v0")
+    >>> pipeline.run()
+
+    # 3. List all registered pipelines
+    >>> pipeline_ids = list_pipelines()
+
+    # 4. Unregister a pipeline
+    >>> unregister_pipeline("MyPipeline-v0")
+"""
 
 
 class PipelineCreator(Protocol):
@@ -75,6 +74,7 @@ def register_pipeline(
     cfg_entry_point: ConfigCreator | str | None = None,
 ) -> None:
     """Register a pipeline in the global registry."""
+
     assert entry_point is not None, "Entry point must be provided."
     assert cfg_entry_point is not None, "Configuration entry point must be provided."
 
@@ -94,6 +94,7 @@ def register_pipeline(
 
 def _load_entry_point(entry_point: str) -> Any:
     """Load a class or function from an entry point string."""
+
     try:
         mod_name, attr_name = entry_point.split(":")
         mod = importlib.import_module(mod_name)
@@ -106,6 +107,7 @@ def _load_entry_point(entry_point: str) -> Any:
 
 
 def _load_creator(creator: str | PipelineCreator | ConfigCreator) -> PipelineCreator | ConfigCreator:
+
     if isinstance(creator, str):
         return _load_entry_point(creator)
     else:
@@ -116,6 +118,7 @@ def make_pipeline(
     id: str,
 ) -> Pipeline:
     """Create a pipeline instance from the registry."""
+
     if id not in pipeline_registry:
         raise ValueError(
             f"Pipeline '{id}' not found in registry. You can list all registered pipelines with list_pipelines()."
@@ -141,39 +144,39 @@ def make_pipeline(
 
 def list_pipelines() -> list[str]:
     """List all registered pipeline IDs."""
+
     return sorted(pipeline_registry.keys())
 
 
 def unregister_pipeline(id: str) -> None:
     """Unregister a pipeline from the registry."""
+
     if id not in pipeline_registry:
         raise ValueError(f"Pipeline '{id}' not found in registry.")
     del pipeline_registry[id]
 
 
-# ============================================================================
-# Skill Registration System
-# ============================================================================
-# This section provides the registration and instantiation system for skills.
-# Skills can be registered manually, then created using SkillRegistry.create().
-#
-# Usage:
-#     # 1. Using decorator (recommended)
-#     @register_skill("reach", "Reach to target pose", ["curobo"])
-#     class ReachSkill(Skill):
-#         ...
-#
-#     # 2. Manual registration
-#     class MySkill(Skill):
-#         cfg = SkillCfg(name="my_skill", description="My custom skill")
-#     SkillRegistry.register(MySkill)
-#
-#     # 3. Create a skill instance
-#     skill = SkillRegistry.create("reach", extra_cfg=SkillExtraCfg(param="value"))
-#
-#     # 4. List all registered skills
-#     skill_configs = SkillRegistry.list_skills()
-# ============================================================================
+"""Skill Registration System
+This section provides the registration and instantiation system for skills.
+Skills can be registered manually, then created using SkillRegistry.create().
+
+Usage:
+    # 1. Using decorator (recommended)
+    >>> @register_skill("reach", "Reach to target pose", ["curobo"])
+    >>> class ReachSkill(Skill):
+    >>>    ...
+
+    # 2. Manual registration
+    >>> class MySkill(Skill):
+    >>>     cfg = SkillCfg(name="my_skill", description="My custom skill")
+    >>> SkillRegistry.register(MySkill)
+
+    # 3. Create a skill instance
+    >>> skill = SkillRegistry.create("reach", extra_cfg=SkillExtraCfg(param="value"))
+
+    # 4. List all registered skills
+    >>> skill_configs = SkillRegistry.list_skills()
+"""
 
 
 class SkillRegistry:
@@ -206,6 +209,7 @@ class SkillRegistry:
     @classmethod
     def get(cls, name: str) -> type:
         """Get a skill from the registry."""
+
         if name not in cls._skills:
             raise ValueError(f"Skill '{name}' not found in registry.")
         return cls._skills[name]
@@ -213,12 +217,14 @@ class SkillRegistry:
     @classmethod
     def create(cls, name: str, extra_cfg: SkillExtraCfg) -> Skill:
         """Create a skill instance from the registry, extra_cfg will overwrite the default value in the skill configuration."""
+
         skill_cls = cls.get(name)
         return skill_cls(extra_cfg)
 
     @classmethod
     def list_skills(cls) -> list[str]:
         """List all registered skill names."""
+
         return [skill_cls.get_cfg() for skill_cls in cls._skills.values()]
 
 

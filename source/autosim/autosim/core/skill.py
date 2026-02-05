@@ -43,6 +43,7 @@ class Skill(ABC):
     @classmethod
     def get_cfg(cls) -> SkillCfg:
         """Get the configuration of the skill."""
+
         return cls.cfg
 
     @abstractmethod
@@ -59,6 +60,7 @@ class Skill(ABC):
         Returns:
             The goal of the skill.
         """
+
         raise NotImplementedError(f"{self.__class__.__name__}.extract_goal_from_info() must be implemented.")
 
     def plan(self, state: WorldState, goal: SkillGoal) -> bool:
@@ -71,6 +73,7 @@ class Skill(ABC):
         Returns:
             True if the skill is planned successfully, False otherwise.
         """
+
         self._status = SkillStatus.PLANNING
         success = self.execute_plan(state, goal)
         if success:
@@ -90,6 +93,7 @@ class Skill(ABC):
         Returns:
             True if the skill is planned successfully, False otherwise.
         """
+
         raise NotImplementedError(f"{self.__class__.__name__}.plan() must be implemented.")
 
     @abstractmethod
@@ -102,11 +106,14 @@ class Skill(ABC):
         Returns:
             The output of the skill, containing the action, done, success, info, and trajectory.
         """
+
         raise NotImplementedError(f"{self.__class__.__name__}.step() must be implemented.")
 
     def reset(self) -> None:
         """Reset the skill."""
+
         self._status = SkillStatus.IDLE
 
     def __repr__(self) -> str:
+
         return f"{self.__class__.__name__}(status={self._status.value})"
