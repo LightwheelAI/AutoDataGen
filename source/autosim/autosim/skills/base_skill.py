@@ -19,7 +19,7 @@ class GripperSkillExtraCfg(SkillExtraCfg):
 
     gripper_value: float = 0.0
     """The value of the gripper."""
-    duration: int = 10
+    duration: int = 20
     """The duration of the gripper."""
 
 
