@@ -87,7 +87,7 @@ class AutoSimPipeline(ABC):
         # save generated actions
         self._generated_actions = []
 
-    def run(self) -> bool:
+    def run(self) -> PipelineOutput:
         """Run the AutoSim pipeline."""
 
         # decompose the task with cache hit check
@@ -96,15 +96,7 @@ class AutoSimPipeline(ABC):
         # execute the pipeline
         pipeline_output = self.execute_skill_sequence(decompose_result)
 
-        # save results
-        success = self.save_results(pipeline_output)
-
-        return success
-
-    def save_results(self, pipeline_output: PipelineOutput) -> bool:
-        """Save the results of the pipeline execution."""
-        print(pipeline_output)
-        return True
+        return pipeline_output
 
     @abstractmethod
     def load_env(self) -> ManagerBasedEnv:
@@ -133,6 +125,8 @@ class AutoSimPipeline(ABC):
 
         self._check_skill_extra_cfg()
         self._env.reset()
+
+        # TODO: add retry mechanism for skill execution
         for subtask in decompose_result.subtasks:
             for skill_info in subtask.skills:
 
@@ -152,6 +146,8 @@ class AutoSimPipeline(ABC):
             self._logger.info(
                 f"Subtask {subtask.subtask_name} executed successfully with {len(subtask.skills)} skills."
             )
+
+        self._env.reset()
 
         # build pipeline output
         return PipelineOutput(success=True, generated_actions=self._generated_actions)
