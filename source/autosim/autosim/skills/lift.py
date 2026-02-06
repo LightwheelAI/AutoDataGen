@@ -68,7 +68,7 @@ class LiftSkill(ReachSkill):
 
         ee_pose = self._planner.get_ee_pose(activate_q)
         target_pos, target_quat = ee_pose.position.squeeze(0).clone(), ee_pose.quaternion.squeeze(0).clone()
-        # lift the end-effector upward by the lift offset
+        # lift the end-effector upward by the lift offset, target pos is in the robot root frame
         target_pos[2] += self.cfg.extra_cfg.lift_offset
 
         self._trajectory = self._planner.plan_motion(

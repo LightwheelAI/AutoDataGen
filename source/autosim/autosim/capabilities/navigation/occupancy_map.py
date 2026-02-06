@@ -131,7 +131,7 @@ def get_occupancy_map(env: ManagerBasedEnv, cfg: OccupancyMapCfg) -> OccupancyMa
 
     stage = env.scene.stage
 
-    floor_prim_path = f"/World/envs/env_0/Scene/{cfg.floor_prim_suffix}"
+    floor_prim_path = f"/World/envs/env_0/{cfg.floor_prim_suffix}"
 
     min_bound, max_bound = _get_prim_bounds(stage, floor_prim_path)
 

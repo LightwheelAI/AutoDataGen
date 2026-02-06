@@ -133,16 +133,18 @@ class AutoSimPipeline(ABC):
                 skill = SkillRegistry.create(
                     skill_info.skill_type, self.cfg.skills.get(skill_info.skill_type).extra_cfg
                 )
+
+                if self._action_adapter.should_skip_apply(skill):
+                    self._logger.info(f"Skill {skill_info.skill_type} skipped due to action adapter setting.")
+                    continue
+
                 goal = skill.extract_goal_from_info(skill_info, self._env, self._env_extra_info)
                 success, steps = self._execute_single_skill(skill, goal)
 
                 if not success:
                     self._logger.error(f"Skill {skill_info.skill_type} execution failed with {steps} steps.")
                     raise ValueError(f"Skill {skill_info.skill_type} execution failed with {steps} steps.")
-                if success and steps == -1:
-                    self._logger.info(f"Skill {skill_info.skill_type} but skipped due to action adapter setting.")
-                else:
-                    self._logger.info(f"Skill {skill_info.skill_type} executed successfully.({steps} steps)")
+                self._logger.info(f"Skill {skill_info.skill_type} executed successfully.({steps} steps)")
             self._logger.info(
                 f"Subtask {subtask.subtask_name} executed successfully with {len(subtask.skills)} skills."
             )
@@ -168,9 +170,6 @@ class AutoSimPipeline(ABC):
 
     def _execute_single_skill(self, skill: Skill, goal: SkillGoal) -> tuple[bool, int]:
         """Execute a single skill."""
-
-        if self._action_adapter.should_skip_apply(skill):
-            return True, -1
 
         world_state: WorldState = self._build_world_state()
         plan_success = skill.plan(world_state, goal)

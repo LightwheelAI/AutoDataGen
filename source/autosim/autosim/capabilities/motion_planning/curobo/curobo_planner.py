@@ -121,7 +121,7 @@ class CuroboPlanner:
         if isinstance(self.cfg.robot_config_file, str):
             self._logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
 
-            curobo_config_path = self.cfg.curobo_config_path or get_configs_path()
+            curobo_config_path = self.cfg.curobo_config_path or f"{get_configs_path()}/robot"
             curobo_asset_path = self.cfg.curobo_asset_path or get_assets_path()
 
             content_path = ContentPath(

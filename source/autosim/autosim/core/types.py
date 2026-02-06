@@ -69,7 +69,7 @@ class EnvExtraInfo:
     """Extra information from the environment."""
 
     task_name: str
-    """The name of the task."""
+    """The name of the task, need to be the same as the task name in the gymnasium registry."""
     objects: list[str] | None = None
     """The objects in the environment."""
     additional_prompt_contents: str | None = None
