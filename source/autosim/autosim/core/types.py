@@ -220,7 +220,7 @@ class DecomposeResult:
     """The parent classes of the task."""
     objects: list[ObjectInfo]
     """The objects of the task."""
-    fixtures: list[str]
+    fixtures: list[FixtureInfo]
     """The fixtures of the task."""
     interactive_elements: list[str]
     """The interactive elements of the task."""
