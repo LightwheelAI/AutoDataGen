@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -83,11 +84,31 @@ class EnvExtraInfo:
     """The name of the end-effector link."""
 
     object_reach_target_poses: dict[str, list[torch.Tensor]] = field(default_factory=dict)
-    """The reach target poses in the objects frame. each object can have multiple reach target poses [x, y, z, qw, qx, qy, qz]."""
+    """The reach target poses in the objects frame. each object can have a list of reach target poses [x, y, z, qw, qx, qy, qz] in the order of execution."""
     object_extra_reach_target_poses: dict[str, dict[str, list[torch.Tensor]]] = field(default_factory=dict)
-    """The extra reach target poses in the objects frame. each object can have multiple extra reach target poses [x, y, z, qw, qx, qy, qz] with ee_name as the key.
-    For example, object_extra_reach_target_poses = {"obj": {"ee_1": [x, y, z, qw, qx, qy, qz]}}.
-    """
+    """The extra reach target poses in the objects frame. each object can have a list of extra reach target poses [x, y, z, qw, qx, qy, qz] with ee_name as the key in the order of execution."""
+
+    def __post_init__(self):
+        self._object_reach_target_poses_iterator_dict = {
+            object_name: self._build_iterator(reach_target_poses)
+            for object_name, reach_target_poses in self.object_reach_target_poses.items()
+        }
+        self._object_extra_reach_target_poses_iterator_dict = {
+            object_name: {
+                ee_name: self._build_iterator(extra_reach_target_poses)
+                for ee_name, extra_reach_target_poses in extra_reach_target_poses.items()
+            }
+            for object_name, extra_reach_target_poses in self.object_extra_reach_target_poses.items()
+        }
+
+    def _build_iterator(self, value_list: list[torch.Tensor]) -> Iterator[torch.Tensor]:
+        yield from value_list
+
+    def get_next_reach_target_pose(self, object_name: str) -> torch.Tensor:
+        return next(self._object_reach_target_poses_iterator_dict[object_name])
+
+    def get_next_extra_reach_target_pose(self, object_name: str, ee_name: str) -> torch.Tensor:
+        return next(self._object_extra_reach_target_poses_iterator_dict[object_name][ee_name])
 
 
 @dataclass

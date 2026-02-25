@@ -55,25 +55,8 @@ class ReachSkill(CuroboSkillBase):
         object_pose_in_env = env.scene[target_object].data.root_pose_w
         object_pos_in_env, object_quat_in_env = object_pose_in_env[:, :3], object_pose_in_env[:, 3:]
 
-        robot_base_link_idx = robot.body_names.index(env_extra_info.robot_base_link_name)
-        robot_base_pose_in_env = robot.data.body_link_pose_w[:, robot_base_link_idx]
-        robot_base_pos_in_env, robot_base_quat_in_env = robot_base_pose_in_env[:, :3], robot_base_pose_in_env[:, 3:]
-
-        robot_base_pos_in_object, _ = PoseUtils.subtract_frame_transforms(
-            object_pos_in_env, object_quat_in_env, robot_base_pos_in_env, robot_base_quat_in_env
-        )
-
-        min_distance = float("inf")
-        nearest_reach_target_pose = None
-        for reach_target_pose_in_object in env_extra_info.object_reach_target_poses[target_object]:
-            reach_target_pose_in_object = torch.as_tensor(reach_target_pose_in_object, device=env.device)
-            reach_target_pos_in_object = reach_target_pose_in_object[None, :3]
-
-            distance = torch.linalg.norm(robot_base_pos_in_object - reach_target_pos_in_object, dim=-1).item()
-            if distance < min_distance:
-                min_distance = distance
-                nearest_reach_target_pose = reach_target_pose_in_object
-        reach_target_pose_in_object = nearest_reach_target_pose.unsqueeze(0)
+        reach_target_pose = env_extra_info.get_next_reach_target_pose(target_object)
+        reach_target_pose_in_object = reach_target_pose.unsqueeze(0)
         reach_target_pos_in_object, reach_target_quat_in_object = (
             reach_target_pose_in_object[:, :3],
             reach_target_pose_in_object[:, 3:],
@@ -96,7 +79,8 @@ class ReachSkill(CuroboSkillBase):
 
         if target_object in env_extra_info.object_extra_reach_target_poses.keys():
             extra_target_poses = {}
-            for ee_name, ee_target_pose in env_extra_info.object_extra_reach_target_poses[target_object].items():
+            for ee_name in env_extra_info.object_extra_reach_target_poses[target_object].keys():
+                ee_target_pose = env_extra_info.get_next_extra_reach_target_pose(target_object, ee_name)
                 ee_target_pose = torch.as_tensor(ee_target_pose, device=env.device)
                 extra_target_pos_in_obj, extra_target_quat_in_obj = ee_target_pose[:3].unsqueeze(0), ee_target_pose[
                     3:
