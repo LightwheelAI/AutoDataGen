@@ -31,7 +31,7 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
 
         super().__post_init__()
         assert self.move_axis in ["+x", "+y", "+z", "-x", "-y", "-z"], f"Invalid move axis: {self.move_axis}."
-        axis_map = {
+        self._axis_map = {
             "+x": torch.tensor([1.0, 0.0, 0.0]),
             "+y": torch.tensor([0.0, 1.0, 0.0]),
             "+z": torch.tensor([0.0, 0.0, 1.0]),
@@ -39,7 +39,6 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
             "-y": torch.tensor([0.0, -1.0, 0.0]),
             "-z": torch.tensor([0.0, 0.0, -1.0]),
         }
-        self._move_offset_vector = axis_map[self.move_axis] * self.move_offset
 
 
 @configclass
@@ -88,7 +87,8 @@ class RelativeReachSkill(ReachSkill):
 
         # move the eef along the move axis by the move offset based on eef frame, and convert to robot root frame to get target pose
         isaaclab_device = state.device
-        offset_pos_in_ee = self.cfg.extra_cfg._move_offset_vector.to(isaaclab_device).unsqueeze(0)
+        move_offset_vector = self.cfg.extra_cfg._axis_map[self.cfg.extra_cfg.move_axis] * self.cfg.extra_cfg.move_offset
+        offset_pos_in_ee = move_offset_vector.to(isaaclab_device).unsqueeze(0)
         offset_quat_in_ee = torch.tensor([1.0, 0.0, 0.0, 0.0], device=isaaclab_device).unsqueeze(0)
         ee_pos_in_robot_root, ee_quat_in_robot_root = target_pos.to(isaaclab_device), target_quat.to(isaaclab_device)
 
