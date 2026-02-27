@@ -110,6 +110,11 @@ class AutoSimPipeline(ABC):
 
         raise NotImplementedError(f"{self.__class__.__name__}.get_env_extra_info() must be implemented.")
 
+    def reset_env(self) -> None:
+        """Reset the environment."""
+
+        self._env.reset()
+
     def decompose(self) -> DecomposeResult:
         """Decompose the task."""
 
@@ -124,7 +129,7 @@ class AutoSimPipeline(ABC):
         """Execute the skill sequence."""
 
         self._check_skill_extra_cfg()
-        self._env.reset()
+        self.reset_env()
 
         # TODO: add retry mechanism for skill execution
         for subtask in decompose_result.subtasks:
@@ -149,7 +154,7 @@ class AutoSimPipeline(ABC):
                 f"Subtask {subtask.subtask_name} executed successfully with {len(subtask.skills)} skills."
             )
 
-        self._env.reset()
+        self.reset_env()
 
         # build pipeline output
         return PipelineOutput(success=True, generated_actions=self._generated_actions)
