@@ -26,8 +26,8 @@ class NavigateSkillExtraCfg(SkillExtraCfg):
     """The configuration for the A* motion planner."""
     local_planner: DWAPlannerCfg = DWAPlannerCfg()
     """The configuration for the DWA motion planner."""
-    uws_dwa: bool = False
-    """Whether to use UWS-DWA motion planner."""
+    use_dwa: bool = False
+    """Whether to use DWA motion planner."""
     waypoint_tolerance: float = 0.5
     """The tolerance of the waypoint."""
     goal_tolerance: float = 0.25
@@ -231,7 +231,7 @@ class NavigateSkill(Skill):
 
         vx, vy, vyaw = 0.0, 0.0, 0.0
 
-        if not self.cfg.extra_cfg.uws_dwa:
+        if not self.cfg.extra_cfg.use_dwa:
             # ---------- Original local planner: P controller ----------
             if dist_to_waypoint > 0.01:
                 # Normalize and scale by max velocity

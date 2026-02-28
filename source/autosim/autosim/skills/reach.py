@@ -104,6 +104,8 @@ class ReachSkill(CuroboSkillBase):
     def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
         """Execute the plan of the reach skill."""
 
+        self._logger.info(f"Reach from pose in environment: {state.robot_ee_pose}")
+
         target_pose = goal.target_pose  # target pose in the robot root frame
         target_pos, target_quat = target_pose[:3], target_pose[3:]
 

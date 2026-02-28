@@ -4,6 +4,7 @@ from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils import configclass
 
 from autosim import register_skill
+from autosim.core.logger import AutoSimLogger
 from autosim.core.skill import SkillCfg
 from autosim.core.types import (
     EnvExtraInfo,
@@ -54,6 +55,7 @@ class RelativeReachSkill(ReachSkill):
 
     def __init__(self, extra_cfg: RelativeReachSkillCfg) -> None:
         super().__init__(extra_cfg)
+        self._logger = AutoSimLogger("RelativeReachSkill")
 
     def extract_goal_from_info(
         self, skill_info: SkillInfo, env: ManagerBasedEnv, env_extra_info: EnvExtraInfo
@@ -84,6 +86,7 @@ class RelativeReachSkill(ReachSkill):
 
         ee_pose = self._planner.get_ee_pose(activate_q)
         target_pos, target_quat = ee_pose.position.clone(), ee_pose.quaternion.clone()
+        self._logger.info(f"ee pos in robot root frame: {target_pos}, ee quat in robot root frame: {target_quat}")
 
         # move the eef along the move axis by the move offset based on eef frame, and convert to robot root frame to get target pose
         isaaclab_device = state.device
@@ -99,6 +102,9 @@ class RelativeReachSkill(ReachSkill):
         planner_device = self._planner.tensor_args.device
         target_pos = offset_pos_in_robot_root.to(planner_device).squeeze(0)
         target_quat = offset_quat_in_robot_root.to(planner_device).squeeze(0)
+        self._logger.info(
+            f"target pos in robot root frame: {target_pos}, target quat in robot root frame: {target_quat}"
+        )
 
         self._trajectory = self._planner.plan_motion(
             target_pos,

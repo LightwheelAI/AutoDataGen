@@ -162,7 +162,7 @@ class AutoSimPipeline(ABC):
     def _check_skill_extra_cfg(self) -> None:
         """modify the extra configuration of the skills."""
 
-        if self.cfg.skills.moveto.extra_cfg.uws_dwa and self.cfg.skills.moveto.extra_cfg.local_planner.dt is None:
+        if self.cfg.skills.moveto.extra_cfg.use_dwa and self.cfg.skills.moveto.extra_cfg.local_planner.dt is None:
             physics_dt = self._env.cfg.sim.dt
             decimation = self._env.cfg.decimation
             self.cfg.skills.moveto.extra_cfg.local_planner.dt = physics_dt * decimation
