@@ -123,6 +123,8 @@ class WorldState:
     """The end - effector pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
     robot_base_pose: torch.Tensor
     """The base pose of the robot in the world frame. [x, y, yaw]"""
+    robot_root_pose: torch.Tensor
+    """The root pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
     sim_joint_names: list[str]
     """The joint names of the robot."""
     objects: dict[str, torch.Tensor] = field(default_factory=dict)

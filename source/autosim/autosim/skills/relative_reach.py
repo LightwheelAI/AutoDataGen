@@ -106,6 +106,19 @@ class RelativeReachSkill(ReachSkill):
             f"target pos in robot root frame: {target_pos}, target quat in robot root frame: {target_quat}"
         )
 
+        reach_target_pos_in_robot_root = offset_pos_in_robot_root.clone()
+        reach_target_quat_in_robot_root = offset_quat_in_robot_root.clone()
+        robot_root_pos_in_env, robot_root_quat_in_env = state.robot_root_pose[None, :3], state.robot_root_pose[None, 3:]
+        reach_target_pos_in_env, reach_target_quat_in_env = PoseUtils.combine_frame_transforms(
+            robot_root_pos_in_env,
+            robot_root_quat_in_env,
+            reach_target_pos_in_robot_root,
+            reach_target_quat_in_robot_root,
+        )
+        self._logger.info(f"reach target pos in environment: {reach_target_pos_in_env}")
+        self._logger.info(f"reach target quat in environment: {reach_target_quat_in_env}")
+        self._target_poses["target_pose"] = torch.cat((reach_target_pos_in_env, reach_target_quat_in_env), dim=-1)
+
         self._trajectory = self._planner.plan_motion(
             target_pos,
             target_quat,

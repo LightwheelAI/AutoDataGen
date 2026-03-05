@@ -28,4 +28,13 @@ class AutoSimSkillsExtraCfg:
 
     def get(cls, skill_name: str):
         """Get the skill configuration by name."""
+
         return getattr(cls, skill_name)
+
+    def debug_target_pose(self):
+        """Debug the target pose of the skills."""
+
+        self.lift.extra_cfg.debug_target_pose = True
+        self.pull.extra_cfg.debug_target_pose = True
+        self.push.extra_cfg.debug_target_pose = True
+        self.reach.extra_cfg.debug_target_pose = True

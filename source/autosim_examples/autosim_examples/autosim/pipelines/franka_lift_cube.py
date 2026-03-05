@@ -18,7 +18,8 @@ class FrankaCubeLiftPipelineCfg(AutoSimPipelineCfg):
     action_adapter: FrankaAbsAdapterCfg = FrankaAbsAdapterCfg()
 
     def __post_init__(self):
-        self.skills.lift.extra_cfg.lift_offset = 0.20
+        self.skills.lift.extra_cfg.move_axis = "-z"
+        self.skills.lift.extra_cfg.lift_offset = 0.30
 
         self.occupancy_map.floor_prim_suffix = "Table"
 
@@ -38,7 +39,8 @@ class FrankaCubeLiftPipeline(AutoSimPipeline):
         from isaaclab_tasks.utils import parse_env_cfg
 
         env_cfg = parse_env_cfg(self._task_name, device="cuda:0", num_envs=1, use_fabric=True)
-        env_cfg.terminations.time_out = None
+        env_cfg.terminations = None
+        env_cfg.scene.robot.spawn.rigid_props.disable_gravity = True
 
         env = gym.make(self._task_name, cfg=env_cfg).unwrapped
         return env
@@ -54,8 +56,7 @@ class FrankaCubeLiftPipeline(AutoSimPipeline):
             ee_link_name="panda_hand",
             object_reach_target_poses={
                 "cube": [
-                    # torch.tensor([0.0, 0.0, 0.1, 0.0, 1.0, 0.0, 0.0]),
-                    torch.tensor([0.0, 0.0, 0.15, 0.0, 1.0, 0.0, 0.0]),
+                    torch.tensor([0.0, 0.0, 0.10, 0.0, 1.0, 0.0, 0.0]),
                 ],
             },
         )

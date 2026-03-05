@@ -28,8 +28,7 @@ from autosim import make_pipeline
 
 def main():
     pipeline = make_pipeline(args_cli.pipeline_id)
-    result = pipeline.run()
-    print(result)
+    pipeline.run()
 
 
 if __name__ == "__main__":

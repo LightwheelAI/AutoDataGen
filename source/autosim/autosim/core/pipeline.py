@@ -216,6 +216,8 @@ class AutoSimPipeline(ABC):
         yaw = torch.atan2(sin_yaw, cos_yaw)
         robot_base_pose = torch.stack((robot_base_pose[0], robot_base_pose[1], yaw))  # [x, y, yaw]
 
+        robot_root_pose = self._robot.data.root_pose_w[self._env_id]
+
         sim_joint_names = self._robot.data.joint_names
 
         objects_dict = dict()
@@ -229,6 +231,7 @@ class AutoSimPipeline(ABC):
             robot_joint_vel=robot_joint_vel,
             robot_ee_pose=robot_ee_pose,
             robot_base_pose=robot_base_pose,
+            robot_root_pose=robot_root_pose,
             sim_joint_names=sim_joint_names,
             objects=objects_dict,
         )

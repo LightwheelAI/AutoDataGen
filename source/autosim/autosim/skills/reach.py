@@ -56,6 +56,7 @@ class ReachSkill(CuroboSkillBase):
         object_pos_in_env, object_quat_in_env = object_pose_in_env[:, :3], object_pose_in_env[:, 3:]
 
         reach_target_pose = env_extra_info.get_next_reach_target_pose(target_object)
+        reach_target_pose = reach_target_pose.to(env.device)
         reach_target_pose_in_object = reach_target_pose.unsqueeze(0)
         reach_target_pos_in_object, reach_target_quat_in_object = (
             reach_target_pose_in_object[:, :3],
@@ -67,6 +68,7 @@ class ReachSkill(CuroboSkillBase):
         )
         self._logger.info(f"Reach target position in environment: {reach_target_pos_in_env}")
         self._logger.info(f"Reach target quaternion in environment: {reach_target_quat_in_env}")
+        self._target_poses["target_pose"] = torch.cat((reach_target_pos_in_env, reach_target_quat_in_env), dim=-1)
 
         robot_root_pose_in_env = robot.data.root_pose_w
         robot_root_pos_in_env, robot_root_quat_in_env = robot_root_pose_in_env[:, :3], robot_root_pose_in_env[:, 3:]
@@ -145,6 +147,8 @@ class ReachSkill(CuroboSkillBase):
             The output of the skill execution.
                 action: The action to be applied to the environment. [joint_positions with isaaclab joint order]
         """
+
+        self.visualize_debug_target_pose()
 
         traj_positions = self._trajectory.position
         if self._step_idx >= len(self._trajectory.position):
