@@ -37,6 +37,10 @@ class NavigateSkillExtraCfg(SkillExtraCfg):
     """The tolerance of the yaw (radians)."""
     sampling_radius: float = 0.8
     """The sampling radius for the target position, in meters."""
+    per_object_sampling_radius: dict[str, float] | None = None
+    """Per-object override for sampling_radius. Keys are object names; unmatched objects use sampling_radius."""
+    per_object_yaw_tolerance: dict[str, float] | None = None
+    """Per-object override for yaw_tolerance. Keys are object names; unmatched objects use yaw_tolerance."""
     num_samples: int = 4
     """The number of samples for the target position."""
 
@@ -86,6 +90,14 @@ class NavigateSkill(Skill):
         if target_object_name not in env.scene.keys():
             raise ValueError(f"Object {target_object_name} not found in scene")
         target_object = env.scene[target_object_name]
+
+        per_obj = self.cfg.extra_cfg.per_object_sampling_radius or {}
+        if target_object_name in per_obj:
+            self.cfg.extra_cfg.sampling_radius = per_obj[target_object_name]
+
+        per_obj_yaw = self.cfg.extra_cfg.per_object_yaw_tolerance or {}
+        if target_object_name in per_obj_yaw:
+            self.cfg.extra_cfg.yaw_tolerance = per_obj_yaw[target_object_name]
 
         obj_pos_w = target_object.data.root_pos_w[0].cpu().numpy()
         self._logger.info(f"Object pose in world frame: {target_object.data.root_pose_w[0]}")
