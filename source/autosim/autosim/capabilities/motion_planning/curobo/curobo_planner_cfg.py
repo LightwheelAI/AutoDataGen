@@ -56,6 +56,10 @@ class CuroboPlannerCfg:
     """List of subffixes to only extract world obstacles from."""
     world_ignore_subffixes: list[str] | None = None
     """List of subffixes to ignore when extracting world obstacles."""
+    self_collision_check: bool = True
+    """Whether to check self-collision during planning."""
+    self_collision_opt: bool = True
+    """Whether to optimize away self-collisions during planning."""
 
     # World update strategy
     enable_dynamic_world_sync: bool = False

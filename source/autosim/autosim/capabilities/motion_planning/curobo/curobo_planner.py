@@ -71,6 +71,8 @@ class CuroboPlanner:
             num_trajopt_seeds=self.cfg.num_trajopt_seeds,
             num_graph_seeds=self.cfg.num_graph_seeds,
             use_cuda_graph=self.cfg.use_cuda_graph,
+            self_collision_check=self.cfg.self_collision_check,
+            self_collision_opt=self.cfg.self_collision_opt,
             fixed_iters_trajopt=True,
             maximum_trajectory_dt=0.5,
             ik_opt_iters=500,
