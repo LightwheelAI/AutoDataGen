@@ -162,7 +162,6 @@ class AutoSimPipeline(ABC):
                     self._logger.info(f"Skill {skill_info.skill_type} skipped due to action adapter setting.")
                     continue
 
-                self._action_adapter.pre_skill_hook(skill_info.skill_type, self._env, self._last_action)
                 goal = skill.extract_goal_from_info(skill_info, self._env, self._env_extra_info)
                 success, steps = self._execute_single_skill(skill, goal)
 
