@@ -34,10 +34,10 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Visualize cuRobo collision spheres during pipeline execution.")
 parser.add_argument("--pipeline_id", type=str, required=True, help="Name of the autosim pipeline.")
 parser.add_argument(
-    "--curobo_link_name", type=str, default="base_link", help="cuRobo link name to query pose in robot-root frame."
+    "--curobo_link_name", type=str, default=None, help="cuRobo link name to query pose in robot-root frame."
 )
 parser.add_argument(
-    "--isaaclab_link_name", type=str, default="base_link", help="Isaac Lab body name to query pose in robot-root frame."
+    "--isaaclab_link_name", type=str, default=None, help="Isaac Lab body name to query pose in robot-root frame."
 )
 
 AppLauncher.add_app_launcher_args(parser)

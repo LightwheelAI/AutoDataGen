@@ -135,6 +135,57 @@ def _compose_robot_to_world(*, robot_root_pose_w: torch.Tensor, pose_r: _Pose7) 
     return _Pose7(pos=pos_w.view(3), quat=quat_w.view(4))
 
 
+def _is_obstacle_enabled(collision_checker, obstacle_name: str, env_idx: int = 0) -> bool:
+    """Check if an obstacle is enabled in the collision checker.
+
+    Args:
+        collision_checker: cuRobo collision checker instance
+        obstacle_name: Name of the obstacle
+        env_idx: Environment index
+
+    Returns:
+        True if the obstacle is enabled, False otherwise
+    """
+    try:
+        # Try cuboid (OBB)
+        if hasattr(collision_checker, "get_obb_idx"):
+            try:
+                obs_idx = collision_checker.get_obb_idx(obstacle_name, env_idx)
+                if obs_idx is not None:
+                    return collision_checker._cube_tensor_list[2][env_idx, obs_idx].item() == 1
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        # Try mesh
+        if hasattr(collision_checker, "get_mesh_idx"):
+            try:
+                mesh_idx = collision_checker.get_mesh_idx(obstacle_name, env_idx)
+                if mesh_idx is not None:
+                    return collision_checker._mesh_tensor_list[2][env_idx, mesh_idx].item() == 1
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        # Try voxel
+        if hasattr(collision_checker, "get_voxel_idx"):
+            try:
+                voxel_idx = collision_checker.get_voxel_idx(obstacle_name, env_idx)
+                if voxel_idx is not None:
+                    return collision_checker._voxel_tensor_list[2][env_idx, voxel_idx].item() == 1
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        # Try blox
+        if hasattr(collision_checker, "_blox_names") and obstacle_name in collision_checker._blox_names:
+            blox_idx = collision_checker._blox_names.index(obstacle_name)
+            return collision_checker._blox_tensor_list[1][blox_idx].item() == 1
+
+    except Exception:
+        pass
+
+    # Default to enabled if we can't determine the state
+    return True
+
+
 def _visualize_world_obstacles(
     *,
     pipeline,
@@ -143,11 +194,24 @@ def _visualize_world_obstacles(
     thickness: float = 2.0,
     z_lift: float = 0.0,
     max_mesh_vertices: int = 200000,
+    show_disabled: bool = True,
 ):
+    """Visualize world obstacles from cuRobo collision checker.
+
+    Args:
+        pipeline: AutoSim pipeline instance
+        env_id: Environment index
+        color: RGBA color for enabled obstacles
+        thickness: Line thickness
+        z_lift: Z-axis offset for visualization
+        max_mesh_vertices: Skip meshes with more vertices than this
+        show_disabled: If True, show disabled obstacles in cyan (default: True)
+    """
     planner = pipeline._motion_planner
     planner.sync_dynamic_objects()
 
     world_model = planner.motion_gen.world_coll_checker.world_model
+    collision_checker = planner.motion_gen.world_coll_checker
     if world_model is None:
         raise RuntimeError("cuRobo collision checker has no world model loaded.")
 
@@ -159,43 +223,79 @@ def _visualize_world_obstacles(
 
     # NOTE: poses in the world_model are in the robot-root frame
 
+    # Cyan (complement of red) for disabled obstacles - highly visible and indicates "inactive"
+    disabled_color = (0.2, 0.8, 0.8, 0.35)  # Cyan with transparency
+
     # Cuboids (OBB pose + dims)
     for cub in world_model.cuboid:
+        is_enabled = _is_obstacle_enabled(collision_checker, cub.name, env_id)
+        if not is_enabled and not show_disabled:
+            continue
+        obstacle_color = color if is_enabled else disabled_color
+
         pose_r = _as_pose7(cub.pose, device=device, dtype=dtype)
         pose_w = _compose_robot_to_world(robot_root_pose_w=robot_root_pose_w, pose_r=pose_r)
         dims = torch.as_tensor(cub.dims, device=device, dtype=dtype).view(3)
         half_dims = dims * 0.5
-        _draw_oriented_box(pose_w=pose_w, half_dims_xyz=half_dims, color=color, thickness=thickness, z_lift=z_lift)
+        _draw_oriented_box(
+            pose_w=pose_w, half_dims_xyz=half_dims, color=obstacle_color, thickness=thickness, z_lift=z_lift
+        )
 
     # Spheres (pose center + radius) -> draw as cube approximation
     for sph in world_model.sphere:
+        is_enabled = _is_obstacle_enabled(collision_checker, sph.name, env_id)
+        if not is_enabled and not show_disabled:
+            continue
+        obstacle_color = color if is_enabled else disabled_color
+
         pose_r = _as_pose7(sph.pose, device=device, dtype=dtype)
         pose_w = _compose_robot_to_world(robot_root_pose_w=robot_root_pose_w, pose_r=pose_r)
         r = float(sph.radius)
         half_dims = torch.tensor([r, r, r], device=device, dtype=dtype)
-        _draw_oriented_box(pose_w=pose_w, half_dims_xyz=half_dims, color=color, thickness=thickness, z_lift=z_lift)
+        _draw_oriented_box(
+            pose_w=pose_w, half_dims_xyz=half_dims, color=obstacle_color, thickness=thickness, z_lift=z_lift
+        )
 
     # Cylinders (pose + radius + height) -> draw as oriented bounding box approximation
     for cyl in world_model.cylinder:
+        is_enabled = _is_obstacle_enabled(collision_checker, cyl.name, env_id)
+        if not is_enabled and not show_disabled:
+            continue
+        obstacle_color = color if is_enabled else disabled_color
+
         pose_r = _as_pose7(cyl.pose, device=device, dtype=dtype)
         pose_w = _compose_robot_to_world(robot_root_pose_w=robot_root_pose_w, pose_r=pose_r)
         half_dims = torch.tensor(
             [float(cyl.radius), float(cyl.radius), float(cyl.height) * 0.5], device=device, dtype=dtype
         )
-        _draw_oriented_box(pose_w=pose_w, half_dims_xyz=half_dims, color=color, thickness=thickness, z_lift=z_lift)
+        _draw_oriented_box(
+            pose_w=pose_w, half_dims_xyz=half_dims, color=obstacle_color, thickness=thickness, z_lift=z_lift
+        )
 
     # Capsules (pose + radius + base/tip) -> draw as oriented bounding box approximation
     for cap in world_model.capsule:
+        is_enabled = _is_obstacle_enabled(collision_checker, cap.name, env_id)
+        if not is_enabled and not show_disabled:
+            continue
+        obstacle_color = color if is_enabled else disabled_color
+
         pose_r = _as_pose7(cap.pose, device=device, dtype=dtype)
         pose_w = _compose_robot_to_world(robot_root_pose_w=robot_root_pose_w, pose_r=pose_r)
         base = torch.as_tensor(cap.base, device=device, dtype=dtype).view(3)
         tip = torch.as_tensor(cap.tip, device=device, dtype=dtype).view(3)
         height = float((tip - base).norm().item())
         half_dims = torch.tensor([float(cap.radius), float(cap.radius), height * 0.5], device=device, dtype=dtype)
-        _draw_oriented_box(pose_w=pose_w, half_dims_xyz=half_dims, color=color, thickness=thickness, z_lift=z_lift)
+        _draw_oriented_box(
+            pose_w=pose_w, half_dims_xyz=half_dims, color=obstacle_color, thickness=thickness, z_lift=z_lift
+        )
 
     # Mesh obstacles: prefer a tight OBB via cuRobo's `Mesh.get_cuboid()`.
     for mesh in world_model.mesh:
+        is_enabled = _is_obstacle_enabled(collision_checker, mesh.name, env_id)
+        if not is_enabled and not show_disabled:
+            continue
+        obstacle_color = color if is_enabled else disabled_color
+
         verts = getattr(mesh, "vertices", None)
         if verts is not None and len(verts) > int(max_mesh_vertices):
             continue
@@ -211,7 +311,9 @@ def _visualize_world_obstacles(
         pose_w = _compose_robot_to_world(robot_root_pose_w=robot_root_pose_w, pose_r=pose_r)
         dims = torch.as_tensor(cub.dims, device=device, dtype=dtype).view(3)
         half_dims = dims * 0.5
-        _draw_oriented_box(pose_w=pose_w, half_dims_xyz=half_dims, color=color, thickness=thickness, z_lift=z_lift)
+        _draw_oriented_box(
+            pose_w=pose_w, half_dims_xyz=half_dims, color=obstacle_color, thickness=thickness, z_lift=z_lift
+        )
 
 
 def main():
