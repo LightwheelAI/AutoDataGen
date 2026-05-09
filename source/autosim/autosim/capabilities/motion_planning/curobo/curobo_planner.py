@@ -106,6 +106,9 @@ class CuroboPlanner:
         # Define supported cuRobo primitive types for object discovery and pose synchronization
         self.primitive_types: list[str] = ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]
 
+        # Current target object for selective collision checking
+        self._current_target_object: str | None = None
+
     def _refine_config_from_env(self, env: ManagerBasedEnv):
         """Refine the config from the environment."""
 
@@ -217,8 +220,22 @@ class CuroboPlanner:
 
         self._cached_object_mappings = None
 
+    def set_target_object(self, target_object: str | None) -> None:
+        """Set the current target object for selective collision checking.
+
+        Args:
+            target_object: Name of the target object, or None to disable all dynamic objects.
+        """
+
+        self._current_target_object = target_object
+        self._logger.debug(f"Target object set to: {target_object}")
+
     def sync_dynamic_objects(self) -> int:
         """Synchronize dynamic object poses into cuRobo world model.
+
+        If `only_enable_target_object_in_world_sync` is enabled:
+        - If target_object is set: only that object will be enabled
+        - If target_object is None: all dynamic objects will be disabled
 
         Returns:
             Number of obstacles whose pose was updated.
@@ -232,6 +249,24 @@ class CuroboPlanner:
         robot_root_pos_in_world, robot_root_quat_in_world = self._robot.data.root_pos_w, self._robot.data.root_quat_w
 
         updated_count = 0
+
+        # Determine which objects should be enabled
+        if self.cfg.only_enable_target_object_in_world_sync:
+            if self._current_target_object:
+                # Only enable target object (reach scenario)
+                objects_to_enable = {self._current_target_object}
+                self._logger.debug(
+                    f"Selective collision: only enabling '{self._current_target_object}', "
+                    f"disabling {len(object_mappings) - 1} others"
+                )
+            else:
+                # Disable all dynamic objects (lift/push/pull scenario)
+                objects_to_enable = set()
+                self._logger.debug(f"Selective collision: disabling all {len(object_mappings)} dynamic objects")
+        else:
+            # Config not enabled, enable all objects
+            objects_to_enable = set(object_mappings.keys())
+
         for object_name, world_obstacle_names in object_mappings.items():
             obj = rigid_objects[object_name]
             # NOTE: cuRobo world model is in the robot-root frame
@@ -243,12 +278,23 @@ class CuroboPlanner:
                 position=self._to_curobo_device(obj_pos_in_robot_root[self._env_id]),
                 quaternion=self._to_curobo_device(obj_quat_in_robot_root[self._env_id]),
             )
+
+            # Determine if this object should be enabled
+            should_enable = object_name in objects_to_enable
+
             for world_obstacle_name in world_obstacle_names:
+                # Update pose
                 self.motion_gen.world_coll_checker.update_obstacle_pose(
                     world_obstacle_name,
                     obj_pose,
                     env_idx=self._env_id,
                     update_cpu_reference=True,
+                )
+                # Enable or disable obstacle
+                self.motion_gen.world_coll_checker.enable_obstacle(
+                    world_obstacle_name,
+                    enable=should_enable,
+                    env_idx=self._env_id,
                 )
                 updated_count += 1
 

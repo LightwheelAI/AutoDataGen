@@ -67,6 +67,10 @@ class RelativeReachSkill(ReachSkill):
     def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
         """Execute the plan of the relative reach skill."""
 
+        # For lift/push/pull, disable all dynamic object collision checking
+        # because the object is already grasped and we don't need to avoid any dynamic objects
+        self._planner.set_target_object(None)
+
         activate_q, activate_qd = self._build_activate_joint_state(
             state.sim_joint_names, state.robot_joint_pos, state.robot_joint_vel
         )

@@ -403,6 +403,9 @@ class ReachSkill(CuroboSkillBase):
 
         self._logger.debug(f"Reach from pose in environment: {state.robot_ee_pose}")
 
+        # Set current target object for selective collision checking
+        self._planner.set_target_object(goal.target_object)
+
         target_pose = goal.target_pose  # target pose in the robot root frame
         target_pos, target_quat = target_pose[:3], target_pose[3:]
 
@@ -487,3 +490,4 @@ class ReachSkill(CuroboSkillBase):
         self._saved_target_object = None
         self._saved_reach_offset = None
         self._saved_env_extra_info = None
+        self._planner.set_target_object(None)
