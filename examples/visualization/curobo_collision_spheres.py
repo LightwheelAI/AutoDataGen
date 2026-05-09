@@ -33,6 +33,12 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Visualize cuRobo collision spheres during pipeline execution.")
 parser.add_argument("--pipeline_id", type=str, required=True, help="Name of the autosim pipeline.")
+parser.add_argument(
+    "--curobo_link_name", type=str, default="base_link", help="cuRobo link name to query pose in robot-root frame."
+)
+parser.add_argument(
+    "--isaaclab_link_name", type=str, default="base_link", help="Isaac Lab body name to query pose in robot-root frame."
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -175,7 +181,58 @@ def _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii):
     _update_ee_marker(vm_ee, _get_ee_pose_world(pipeline, env_id))
 
 
-def _execute_single_skill_with_viz(pipeline, skill, goal, vm_spheres, vm_ee, unique_radii, env_id):
+def _print_link_pose_in_root_frame(
+    pipeline, env_id: int, curobo_link_name: str | None, isaaclab_link_name: str | None
+) -> None:
+    """Print link pose in robot-root frame from cuRobo FK and/or Isaac Lab body_state_w.
+
+    - cuRobo: FK directly gives the pose in robot-root frame.
+    - Isaac Lab: body_state_w (world frame) minus root_pose_w via subtract_frame_transforms.
+    """
+    import isaaclab.utils.math as PoseUtils
+    from curobo.types.state import JointState as CuroboJointState
+
+    planner = pipeline._motion_planner
+    robot = pipeline._robot
+
+    # --- cuRobo ---
+    if curobo_link_name is not None:
+        q_curobo = _build_curobo_q(pipeline, env_id)
+        js = CuroboJointState(position=q_curobo, joint_names=planner.target_joint_names)
+        kin_state = planner.motion_gen.compute_kinematics(js)
+        link_poses_curobo = kin_state.link_poses
+        if curobo_link_name not in link_poses_curobo:
+            print(f"[cuRobo:{curobo_link_name}] link not found. Available: {list(link_poses_curobo.keys())}")
+        else:
+            link_pose_root = link_poses_curobo[curobo_link_name]
+            pos = link_pose_root.position.view(-1).detach().cpu()
+            quat = link_pose_root.quaternion.view(-1).detach().cpu()  # wxyz
+            print(f"[cuRobo:{curobo_link_name}] (root frame)  pos={pos.tolist()}  quat(wxyz)={quat.tolist()}")
+
+    # --- Isaac Lab ---
+    if isaaclab_link_name is not None:
+        body_names = list(robot.data.body_names)
+        if isaaclab_link_name not in body_names:
+            print(f"[IsaacLab:{isaaclab_link_name}] link not found. Available: {body_names}")
+        else:
+            idx = body_names.index(isaaclab_link_name)
+            body_state = robot.data.body_state_w[env_id, idx].detach()
+            root_pos_w = robot.data.root_pos_w[env_id].detach()
+            root_quat_w = robot.data.root_quat_w[env_id].detach()  # wxyz
+            pos_il, quat_il = PoseUtils.subtract_frame_transforms(
+                root_pos_w.unsqueeze(0),
+                root_quat_w.unsqueeze(0),
+                body_state[:3].unsqueeze(0),
+                body_state[3:7].unsqueeze(0),
+            )
+            pos_il = pos_il.squeeze(0).cpu()
+            quat_il = quat_il.squeeze(0).cpu()  # wxyz
+            print(f"[IsaacLab:{isaaclab_link_name}] (root frame)  pos={pos_il.tolist()}  quat(wxyz)={quat_il.tolist()}")
+
+
+def _execute_single_skill_with_viz(
+    pipeline, skill, goal, vm_spheres, vm_ee, unique_radii, env_id, curobo_link_name=None, isaaclab_link_name=None
+):
     """Inlined from AutoSimPipeline._execute_single_skill with per-step visualization."""
     world_state = pipeline._build_world_state()
     plan_success = skill.plan(world_state, goal)
@@ -195,6 +252,8 @@ def _execute_single_skill_with_viz(pipeline, skill, goal, vm_spheres, vm_ee, uni
 
         pipeline._env.sim.render()
         _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii)
+        if curobo_link_name is not None or isaaclab_link_name is not None:
+            _print_link_pose_in_root_frame(pipeline, env_id, curobo_link_name, isaaclab_link_name)
 
         steps += 1
         if output.done:
@@ -249,7 +308,15 @@ def main():
 
             goal = skill.extract_goal_from_info(skill_info, pipeline._env, pipeline._env_extra_info)
             success, steps = _execute_single_skill_with_viz(
-                pipeline, skill, goal, vm_spheres, vm_ee, unique_radii, env_id
+                pipeline,
+                skill,
+                goal,
+                vm_spheres,
+                vm_ee,
+                unique_radii,
+                env_id,
+                curobo_link_name=args_cli.curobo_link_name,
+                isaaclab_link_name=args_cli.isaaclab_link_name,
             )
 
             if not success:
