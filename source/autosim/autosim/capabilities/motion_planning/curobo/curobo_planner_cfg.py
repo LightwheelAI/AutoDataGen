@@ -63,7 +63,7 @@ class CuroboPlannerCfg:
     """Whether to optimize away self-collisions during planning."""
 
     # World update strategy
-    enable_dynamic_world_sync: bool = False
+    enable_dynamic_world_sync: bool = True
     """If True, synchronize dynamic object poses into cuRobo world before planning (fast incremental update)."""
     only_enable_target_object_in_world_sync: bool = True
     """If True, only enable the target object in the world sync when executing the reach (grasp) skill. Only valid when enable_dynamic_world_sync is True."""
