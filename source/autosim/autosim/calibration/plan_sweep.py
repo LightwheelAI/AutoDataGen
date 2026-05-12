@@ -139,7 +139,12 @@ def reach_plan_sweep(pipeline: AutoSimPipeline, cfg: ReachPlanSweepCfg) -> list[
             if is_reach:
                 reach_skill_counter += 1
 
-            success, _ = pipeline._execute_single_skill(skill, goal)
+            success, _, episode_done = pipeline._execute_single_skill(skill, goal)
+            if episode_done:
+                raise ValueError(
+                    f"Episode completed during skill '{skill_info.skill_type}' (step {skill_info.step}) before reaching"
+                    f" target reach skill (index {cfg.reach_skill_index})."
+                )
             if not success:
                 raise ValueError(
                     f"Skill '{skill_info.skill_type}' (step {skill_info.step}) failed before reaching target reach"

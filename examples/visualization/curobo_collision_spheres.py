@@ -246,7 +246,7 @@ def _execute_single_skill_with_viz(
         action = pipeline._last_action.clone()
         action[pipeline._env_id, : adapter_result.shape[0]] = adapter_result
 
-        pipeline._env.step(action)
+        _, _, terminated, truncated, _ = pipeline._env.step(action)
         pipeline._last_action = action
         pipeline._generated_actions.append(action)
 
@@ -256,8 +256,10 @@ def _execute_single_skill_with_viz(
             _print_link_pose_in_root_frame(pipeline, env_id, curobo_link_name, isaaclab_link_name)
 
         steps += 1
+        if bool((terminated[pipeline._env_id] | truncated[pipeline._env_id]).item()):
+            return True, steps, True
         if output.done:
-            return True, steps
+            return True, steps, False
 
     if steps >= pipeline.cfg.max_steps:
         world_state = pipeline._build_world_state()
@@ -270,7 +272,7 @@ def _execute_single_skill_with_viz(
                 f"Target pos: ({target_pos[0]:.3f}, {target_pos[1]:.3f}), Distance: {dist:.3f}m"
             )
 
-    return False, steps
+    return False, steps, False
 
 
 def main():
@@ -307,7 +309,7 @@ def main():
                 continue
 
             goal = skill.extract_goal_from_info(skill_info, pipeline._env, pipeline._env_extra_info)
-            success, steps = _execute_single_skill_with_viz(
+            success, steps, episode_done = _execute_single_skill_with_viz(
                 pipeline,
                 skill,
                 goal,
@@ -322,6 +324,12 @@ def main():
             if not success:
                 pipeline._logger.error(f"Skill {skill_info.skill_type} failed after {steps} steps.")
                 raise ValueError(f"Skill {skill_info.skill_type} failed after {steps} steps.")
+            if episode_done:
+                pipeline._logger.info(f"Episode completed during skill {skill_info.skill_type}.({steps} steps)")
+                pipeline._logger.info("Pipeline execution completed.")
+                while simulation_app.is_running():
+                    pipeline._env.sim.render()
+                return
             pipeline._logger.info(f"Skill {skill_info.skill_type} done ({steps} steps).")
 
         pipeline._logger.info(f"Subtask {subtask.subtask_name} completed.")
