@@ -134,6 +134,9 @@ class AutoSimPipeline(ABC):
         self._env.reset()
         self._env_extra_info.reset()
 
+        self._generated_actions = []
+        self._last_action = torch.zeros(self._env.action_space.shape, device=self._env.device)
+
     def decompose(self) -> DecomposeResult:
         """Decompose the task."""
 
@@ -163,7 +166,11 @@ class AutoSimPipeline(ABC):
                     continue
 
                 goal = skill.extract_goal_from_info(skill_info, self._env, self._env_extra_info)
-                success, steps = self._execute_single_skill(skill, goal)
+                success, steps, episode_done = self._execute_single_skill(skill, goal)
+
+                if episode_done:
+                    self._logger.info(f"Episode completed during skill {skill_info.skill_type}.({steps} steps)")
+                    return PipelineOutput(success=True, generated_actions=self._generated_actions)
 
                 if not success:
                     self._logger.error(f"Skill {skill_info.skill_type} execution failed with {steps} steps.")
@@ -172,8 +179,6 @@ class AutoSimPipeline(ABC):
             self._logger.info(
                 f"Subtask {subtask.subtask_name} executed successfully with {len(subtask.skills)} skills."
             )
-
-        self.reset_env()
 
         # build pipeline output
         return PipelineOutput(success=True, generated_actions=self._generated_actions)
@@ -192,7 +197,7 @@ class AutoSimPipeline(ABC):
             if isinstance(skill_cfg.extra_cfg, NavigateSkillExtraCfg):
                 skill_cfg.extra_cfg.occupancy_map = self._occupancy_map
 
-    def _execute_single_skill(self, skill: Skill, goal: SkillGoal) -> tuple[bool, int]:
+    def _execute_single_skill(self, skill: Skill, goal: SkillGoal) -> tuple[bool, int, bool]:
         """Execute a single skill."""
 
         world_state: WorldState = self._build_world_state()
@@ -208,13 +213,15 @@ class AutoSimPipeline(ABC):
             action = self._last_action.clone()
             action[self._env_id, : adapter_result.shape[0]] = adapter_result
 
-            self._env.step(action)
+            _, _, terminated, truncated, _ = self._env.step(action)
             self._last_action = action
             self._generated_actions.append(action)
 
             steps += 1
+            if bool((terminated[self._env_id] | truncated[self._env_id]).item()):
+                return True, steps, True
             if output.done:
-                return True, steps
+                return True, steps, False
 
         # Log current and target positions when max_steps reached
         if steps >= self.cfg.max_steps:
@@ -228,7 +235,7 @@ class AutoSimPipeline(ABC):
                     f"Target pos: ({target_pos[0]:.3f}, {target_pos[1]:.3f}), Distance: {dist:.3f}m"
                 )
 
-        return False, steps
+        return False, steps, False
 
     def _build_world_state(self) -> WorldState:
         """Build the world state."""
