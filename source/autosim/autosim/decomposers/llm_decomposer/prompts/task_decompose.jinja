@@ -60,7 +60,7 @@ Output the task decomposition result in JSON format with the following fields:
 ## Decomposition Patterns
 1. **Lift Object Pattern** (for lifting objects off surface):
     ```
-    moveto(object) → reach(object) → grasp(object) → lift(up)
+    moveto(object) → reach(object) → grasp(object) → lift(object)
     ```
 
 2. **Pick-and-Place Pattern** (for moving objects to specific location):
@@ -97,7 +97,7 @@ Output the task decomposition result in JSON format with the following fields:
 2. **Minimize steps**: Only include skills that are necessary to satisfy the success conditions
 3. **Example - LiftObj task**:
     - Success condition: Object is lifted above surface (Z-position check)
-    - Required skills: moveto(object) → reach(object) → grasp(object) → lift(up)
+    - Required skills: moveto(object) → reach(object) → grasp(object) → lift(object)
     - NOT needed: Moving to target location, placing object down (unless required by success condition)
 
 ## Output Format
