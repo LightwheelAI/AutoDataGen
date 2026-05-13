@@ -9,6 +9,12 @@ Run with Isaac Sim UI enabled (do NOT use ``--headless``):
 
     python examples/visualization/curobo_collision_spheres.py --pipeline_id <PIPELINE_ID>
 
+To debug reach planning without executing the planned action trajectory:
+
+    python examples/visualization/curobo_collision_spheres.py \
+        --pipeline_id <PIPELINE_ID> \
+        --hold_on_reach_plan
+
 Defaults
 --------
 * Environment ID: 0
@@ -21,6 +27,9 @@ Notes
 * Pipeline execution logic is inlined so visualization can hook into every step.
 * Spheres with radius <= 0 are disabled placeholders and are skipped.
 * VisualizationMarkers groups spheres by radius (one USD prototype per unique radius).
+* ``--hold_on_reach_plan`` intercepts only reach skills after planning succeeds:
+  it draws the full planned end-effector path, updates markers for inspection,
+  renders the UI for ``--reach_plan_hold_seconds``, then continues normal execution.
 """
 
 from __future__ import annotations
@@ -39,6 +48,17 @@ parser.add_argument(
 parser.add_argument(
     "--isaaclab_link_name", type=str, default=None, help="Isaac Lab body name to query pose in robot-root frame."
 )
+parser.add_argument(
+    "--hold_on_reach_plan",
+    action="store_true",
+    help="For reach skills, visualize the full planned trajectory before executing it.",
+)
+parser.add_argument(
+    "--reach_plan_hold_seconds",
+    type=float,
+    default=10.0,
+    help="Seconds to render the planned reach trajectory before continuing execution.",
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -53,6 +73,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
 from autosim.core.registration import SkillRegistry
+from autosim.utils.debug_util import clear_debug_drawing, draw_line
 
 
 def _build_curobo_q(pipeline, env_id: int) -> torch.Tensor:
@@ -77,7 +98,7 @@ def _build_curobo_q(pipeline, env_id: int) -> torch.Tensor:
     return planner._to_curobo_device(q)
 
 
-def _get_spheres_world(pipeline, env_id: int) -> tuple[np.ndarray, np.ndarray]:
+def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Return (positions, radii) for all active collision spheres in world frame."""
     import isaaclab.utils.math as PoseUtils
     from curobo.types.state import JointState
@@ -85,7 +106,10 @@ def _get_spheres_world(pipeline, env_id: int) -> tuple[np.ndarray, np.ndarray]:
     planner = pipeline._motion_planner
     robot = pipeline._robot
 
-    q_curobo = _build_curobo_q(pipeline, env_id)
+    if q_curobo is None:
+        q_curobo = _build_curobo_q(pipeline, env_id)
+    else:
+        q_curobo = planner._to_curobo_device(q_curobo)
     js = JointState(position=q_curobo, joint_names=planner.target_joint_names)
     kin_state = planner.motion_gen.compute_kinematics(js)
 
@@ -112,14 +136,17 @@ def _get_spheres_world(pipeline, env_id: int) -> tuple[np.ndarray, np.ndarray]:
     return positions, radii
 
 
-def _get_ee_pose_world(pipeline, env_id: int) -> torch.Tensor:
+def _get_ee_pose_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = None) -> torch.Tensor:
     """Return EE pose in world frame as [x, y, z, qw, qx, qy, qz] via cuRobo FK."""
     import isaaclab.utils.math as PoseUtils
 
     planner = pipeline._motion_planner
     robot = pipeline._robot
 
-    q_curobo = _build_curobo_q(pipeline, env_id)
+    if q_curobo is None:
+        q_curobo = _build_curobo_q(pipeline, env_id)
+    else:
+        q_curobo = planner._to_curobo_device(q_curobo)
     ee_pose_root = planner.get_ee_pose(q_curobo)
 
     root_pose = robot.data.root_pose_w[env_id].detach()
@@ -181,6 +208,64 @@ def _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii):
     _update_ee_marker(vm_ee, _get_ee_pose_world(pipeline, env_id))
 
 
+def _draw_trajectory_path(pipeline, env_id: int, trajectory, stride: int = 1) -> list[torch.Tensor]:
+    """Draw the planned reach end-effector path in the Isaac viewport.
+
+    ``trajectory`` is the full cuRobo joint-space plan returned by ``ReachSkill.plan``.
+    Each waypoint is converted back through cuRobo FK, then transformed by the current
+    robot root pose so the debug lines are drawn in Isaac world coordinates.
+    """
+    poses_w = []
+    positions = trajectory.position
+    for i in range(0, len(positions), max(stride, 1)):
+        poses_w.append(_get_ee_pose_world(pipeline, env_id, positions[i]))
+    if len(positions) > 0 and (len(positions) - 1) % max(stride, 1) != 0:
+        poses_w.append(_get_ee_pose_world(pipeline, env_id, positions[-1]))
+
+    for i in range(len(poses_w) - 1):
+        start = tuple(poses_w[i][:3].detach().cpu().tolist())
+        end = tuple(poses_w[i + 1][:3].detach().cpu().tolist())
+        draw_line(start, end, color=(0.0, 0.8, 1.0, 1.0), size=4.0)
+    if poses_w:
+        start = tuple(poses_w[0][:3].detach().cpu().tolist())
+        goal = tuple(poses_w[-1][:3].detach().cpu().tolist())
+        draw_line(
+            (start[0] - 0.04, start[1], start[2]),
+            (start[0] + 0.04, start[1], start[2]),
+            color=(0.0, 1.0, 0.0, 1.0),
+            size=6.0,
+        )
+        draw_line(
+            (goal[0] - 0.04, goal[1], goal[2]), (goal[0] + 0.04, goal[1], goal[2]), color=(1.0, 0.0, 0.0, 1.0), size=6.0
+        )
+    return poses_w
+
+
+def _visualize_planned_reach(pipeline, env_id, trajectory, vm_spheres, vm_ee, unique_radii, duration_s: float):
+    """Draw a reach plan, render briefly, then return to normal execution.
+
+    This is a pre-execution debugging path: after the full reach plan is available,
+    we pause the skill step loop for a bounded wall-clock duration. During this pause
+    the script renders only; it does not call ``skill.step`` or ``env.step``.
+    """
+    clear_debug_drawing()
+    _draw_trajectory_path(pipeline, env_id, trajectory)
+    if len(trajectory.position) > 0:
+        positions, radii = _get_spheres_world(pipeline, env_id, trajectory.position[0])
+        _update_markers(vm_spheres, positions, radii, unique_radii)
+        _update_ee_marker(vm_ee, _get_ee_pose_world(pipeline, env_id, trajectory.position[-1]))
+    print(
+        f"Planned reach trajectory with {len(trajectory.position)} waypoints. "
+        f"Rendering for {duration_s:.1f}s before execution."
+    )
+    if duration_s > 0.0:
+        import time
+
+        end_time = time.monotonic() + duration_s
+        while simulation_app.is_running() and time.monotonic() < end_time:
+            pipeline._env.sim.render()
+
+
 def _print_link_pose_in_root_frame(
     pipeline, env_id: int, curobo_link_name: str | None, isaaclab_link_name: str | None
 ) -> None:
@@ -233,9 +318,30 @@ def _print_link_pose_in_root_frame(
 def _execute_single_skill_with_viz(
     pipeline, skill, goal, vm_spheres, vm_ee, unique_radii, env_id, curobo_link_name=None, isaaclab_link_name=None
 ):
-    """Inlined from AutoSimPipeline._execute_single_skill with per-step visualization."""
+    """Execute one skill with visualization hooks.
+
+    Normal mode matches AutoSimPipeline's step loop and updates markers after each
+    simulation step. With ``--hold_on_reach_plan``, reach skills pause briefly after
+    successful planning so the planned trajectory can be inspected before execution.
+    """
     world_state = pipeline._build_world_state()
     plan_success = skill.plan(world_state, goal)
+
+    if (
+        args_cli.hold_on_reach_plan
+        and plan_success
+        and skill.get_cfg().name == "reach"
+        and getattr(skill, "_trajectory", None) is not None
+    ):
+        _visualize_planned_reach(
+            pipeline,
+            env_id,
+            skill._trajectory,
+            vm_spheres,
+            vm_ee,
+            unique_radii,
+            args_cli.reach_plan_hold_seconds,
+        )
 
     steps = 0
     while plan_success and steps < pipeline.cfg.max_steps:
@@ -284,16 +390,17 @@ def main():
     pipeline = make_pipeline(args_cli.pipeline_id)
     pipeline.initialize()
 
-    # Build markers using the initial robot pose (before reset)
+    # Build markers using the initial robot pose (before reset). The unique radius set
+    # defines the USD sphere prototypes reused for all later marker updates.
     positions, radii = _get_spheres_world(pipeline, env_id)
     unique_radii = np.unique(radii)
     vm_spheres = _create_markers(unique_radii, color, alpha)
     vm_ee = _create_ee_marker(scale=ee_scale)
 
-    # Decompose task
+    # Decompose the task before reset, matching the normal AutoSimPipeline.run() order.
     decompose_result = pipeline.decompose()
 
-    # Execute skill sequence with per-step visualization
+    # After reset, execute the decomposed skills with this script's visualization hooks.
     pipeline._check_skill_extra_cfg()
     pipeline.reset_env()
     _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii)
