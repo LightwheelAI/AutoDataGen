@@ -56,6 +56,10 @@ class CuroboPlannerCfg:
     """List of subffixes to only extract world obstacles from."""
     world_ignore_subffixes: list[str] | None = None
     """List of subffixes to ignore when extracting world obstacles."""
+    collision_enable_substrings: list[str] | None = None
+    """If set, only primitives whose name contains at least one of these substrings will have collision enabled.
+    All other primitives will be disabled. Applied globally to all world obstacles (static + articulated)."""
+
     # Self-collision configuration
     self_collision_check: bool = True
     """Whether to check self-collision during planning."""

@@ -21,7 +21,7 @@ from curobo.wrap.reacher.motion_gen import (
 )
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedEnv
-from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
 
 from autosim.core.logger import AutoSimLogger
 
@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 class CuroboPlanner:
     """Motion planner for robot manipulation using cuRobo."""
+
+    # Identity offset for primitives that should directly follow link pose
+    _IDENTITY_OFFSET_POS = torch.zeros(3)
+    _IDENTITY_OFFSET_QUAT = torch.tensor([1.0, 0.0, 0.0, 0.0])  # w, x, y, z
 
     def __init__(
         self,
@@ -46,6 +50,10 @@ class CuroboPlanner:
         self._env_id = env_id
 
         self.cfg: CuroboPlannerCfg = cfg
+
+        # Cache frequently used paths
+        self._env_prim_path = f"/World/envs/env_{self._env_id}"
+        self._env_scene_prefix = f"{self._env_prim_path}/Scene"
 
         # Initialize logger
         log_level = logging.DEBUG if self.cfg.debug_planner else logging.INFO
@@ -97,17 +105,20 @@ class CuroboPlanner:
         self._logger.info("Warming up motion planner...")
         self.motion_gen.warmup(enable_graph=self.cfg.use_cuda_graph, warmup_js_trajopt=False)
 
-        # Read static world geometry once
-        self._initialize_static_world()
+        # Define supported cuRobo primitive types for object discovery and pose synchronization
+        self.primitive_types: list[str] = ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]
 
         # Cache for dynamic world synchronization.
         self._cached_object_mappings: dict[str, str] | None = None
 
-        # Define supported cuRobo primitive types for object discovery and pose synchronization
-        self.primitive_types: list[str] = ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]
-
         # Current target object for selective collision checking
         self._current_target_object: str | None = None
+
+        # Cache for articulated primitive offsets: {primitive_name: (link_name, offset_pos, offset_quat)}
+        self._articulated_primitive_offsets: dict[str, tuple[str, torch.Tensor, torch.Tensor]] = {}
+
+        # Read static world geometry once
+        self._initialize_static_world()
 
     def _refine_config_from_env(self, env: ManagerBasedEnv):
         """Refine the config from the environment."""
@@ -155,17 +166,23 @@ class CuroboPlanner:
         return tensor.to(device=self.tensor_args.device, dtype=self.tensor_args.dtype)
 
     def _initialize_static_world(self) -> None:
-        """Initialize static world geometry from USD stage (only called once)."""
+        """Initialize static world geometry from USD stage.
 
-        env_prim_path = f"/World/envs/env_{self._env_id}"
-        robot_prim_path = self.cfg.robot_prim_path or f"{env_prim_path}/Robot"
+        This method is called once during initialization. It:
+        1. Reads obstacle geometry from USD stage via cuRobo's UsdHelper
+        2. Filters primitives based on collision_enable_substrings (if configured)
+        3. Loads the filtered world into cuRobo's collision checker
+        4. Builds offset cache for articulated object primitives
+        """
+
+        robot_prim_path = self.cfg.robot_prim_path or f"{self._env_prim_path}/Robot"
 
         world_only_subffixes = self.cfg.world_only_subffixes or []
-        only_paths = [f"{env_prim_path}/{sub}" for sub in world_only_subffixes]
+        only_paths = [f"{self._env_prim_path}/{sub}" for sub in world_only_subffixes]
 
         world_ignore_subffixes = self.cfg.world_ignore_subffixes or []
-        ignore_list = [f"{env_prim_path}/{sub}" for sub in world_ignore_subffixes] or [
-            f"{env_prim_path}/target",
+        ignore_list = [f"{self._env_prim_path}/{sub}" for sub in world_ignore_subffixes] or [
+            f"{self._env_prim_path}/target",
             "/World/defaultGroundPlane",
             "/curobo",
         ]
@@ -176,9 +193,212 @@ class CuroboPlanner:
             reference_prim_path=robot_prim_path,
             ignore_substring=ignore_list,
         )
+
+        # Remove primitives that don't match collision_enable_substrings before loading into cuRobo
+        self._filter_world_config(world_cfg)
+
+        # Load filtered world geometry into cuRobo collision checker
         self._static_world_config = world_cfg.get_collision_check_world()
         self.motion_gen.update_world(self._static_world_config)
         self._invalidate_object_mapping_cache()
+
+        # Build offset cache for articulated primitives (relative to their parent link)
+        # This cache is used later to sync articulated object poses before each planning call
+        self._build_articulated_primitive_offsets()
+
+    def _filter_world_config(self, world_cfg) -> None:
+        """Remove primitives from WorldConfig that don't match collision_enable_substrings.
+
+        Modifies world_cfg in-place before it is loaded into cuRobo, so filtered
+        primitives never enter the collision checker (saves memory and computation).
+
+        Args:
+            world_cfg: WorldConfig object from cuRobo's UsdHelper.get_obstacles_from_stage()
+
+        Note:
+            If collision_enable_substrings is None, all primitives are kept (no filtering).
+        """
+
+        substrings = self.cfg.collision_enable_substrings
+        if substrings is None:
+            return
+
+        for attr in ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]:
+            primitive_list = getattr(world_cfg, attr, None)
+            if not primitive_list:
+                continue
+            filtered = [p for p in primitive_list if any(sub in p.name for sub in substrings)]
+            setattr(world_cfg, attr, filtered)
+
+    def _collect_primitives_by_prefix(self, prefix: str) -> list[str]:
+        """Collect all primitive names from cuRobo world model that start with given prefix.
+
+        Args:
+            prefix: Prefix to filter primitive names (e.g., "/World/envs/env_0/Scene/Refrigerator050")
+
+        Returns:
+            List of primitive names matching the prefix.
+        """
+        world_model = self.motion_gen.world_coll_checker.world_model
+        primitives = []
+        for primitive_type in self.primitive_types:
+            primitive_list = getattr(world_model, primitive_type, None)
+            if not primitive_list:
+                continue
+            for primitive in primitive_list:
+                if primitive.name.startswith(prefix):
+                    primitives.append(primitive.name)
+        return primitives
+
+    def _get_articulated_link_poses(
+        self,
+    ) -> dict[str, dict[str, tuple[torch.Tensor, torch.Tensor]]]:
+        """Get current link poses for all articulated objects in robot root frame.
+
+        Returns:
+            Nested dict: {obj_name: {link_name: (pos, quat)}}
+            Poses are on cuRobo device and in robot root frame.
+        """
+        articulations = self._env.scene.articulations
+        world_only_subffixes_paths = [f"{self._env_prim_path}/{sub}" for sub in self.cfg.world_only_subffixes or []]
+
+        robot_root_pos_w = self._robot.data.root_pos_w
+        robot_root_quat_w = self._robot.data.root_quat_w
+
+        result = {}
+
+        for obj_name, articulation in articulations.items():
+            if f"{self._env_scene_prefix}/{obj_name}" not in world_only_subffixes_paths:
+                continue
+
+            body_pos_w, body_quat_w = articulation.data.body_pos_w, articulation.data.body_quat_w
+            body_count = body_pos_w.shape[1]
+            body_pos_in_robot, body_quat_in_robot = subtract_frame_transforms(
+                robot_root_pos_w.repeat(1, body_count, 1),
+                robot_root_quat_w.repeat(1, body_count, 1),
+                body_pos_w,
+                body_quat_w,
+            )
+
+            link_poses = {}
+            for link_idx, link_name in enumerate(articulation.data.body_names):
+                link_poses[link_name] = (
+                    self._to_curobo_device(body_pos_in_robot[self._env_id][link_idx]),
+                    self._to_curobo_device(body_quat_in_robot[self._env_id][link_idx]),
+                )
+
+            result[obj_name] = link_poses
+
+        return result
+
+    def _build_articulated_primitive_offsets(self) -> None:
+        """Build offset cache for articulated primitives relative to their parent link.
+
+        cuRobo only stores leaf primitives (mesh/cuboid/etc), not link-level prims. We read
+        each link's initial pose from Isaac Lab (which matches USD at init time), convert to
+        robot root frame, then compute offset from each leaf primitive's cuRobo pose. The
+        cached offsets are later used in _sync_articulated_obstacles() to update primitive
+        poses based on current link poses from Isaac Lab.
+        """
+
+        articulated_link_poses = self._get_articulated_link_poses()
+
+        for obj_name, link_poses in articulated_link_poses.items():
+            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}"
+
+            # Collect all leaf primitives for this articulated object
+            all_primitives = self._collect_primitives_by_prefix(obj_prim_prefix)
+
+            # Group primitives by link name
+            link_children: dict[str, list[str]] = {}
+            for prim_name in all_primitives:
+                relative_path = prim_name.split(f"{obj_prim_prefix}/")[1]
+                link_name = relative_path.split("/")[0]
+                if link_name not in link_children:
+                    link_children[link_name] = []
+                link_children[link_name].append(prim_name)
+
+            # Compute offsets for each primitive
+            for link_name, child_prim_names in link_children.items():
+                if link_name not in link_poses:
+                    self._logger.warning(
+                        f"Link {link_name} not found in articulation body names, using identity offset"
+                    )
+                    for child_prim_name in child_prim_names:
+                        self._articulated_primitive_offsets[child_prim_name] = (
+                            link_name,
+                            self._IDENTITY_OFFSET_POS,
+                            self._IDENTITY_OFFSET_QUAT,
+                        )
+                    continue
+
+                link_pos, link_quat = link_poses[link_name]
+
+                for child_prim_name in child_prim_names:
+                    child_obstacle = self.motion_gen.world_coll_checker.world_model.get_obstacle(child_prim_name)
+                    child_pose = Pose.from_list(child_obstacle.pose, tensor_args=self.tensor_args)
+                    child_pos, child_quat = child_pose.position.squeeze(0), child_pose.quaternion.squeeze(0)
+
+                    offset_pos, offset_quat = subtract_frame_transforms(
+                        link_pos.unsqueeze(0), link_quat.unsqueeze(0), child_pos.unsqueeze(0), child_quat.unsqueeze(0)
+                    )
+
+                    self._articulated_primitive_offsets[child_prim_name] = (
+                        link_name,
+                        offset_pos.squeeze(0),
+                        offset_quat.squeeze(0),
+                    )
+
+    def _sync_articulated_obstacles(self) -> None:
+        """Sync articulated obstacle poses from Isaac Lab link state using cached offsets.
+
+        For each primitive, computes: primitive_pose = link_pose ⊕ offset
+        where link_pose comes from Isaac Lab's current articulation state, and offset
+        was computed during initialization in _build_articulated_primitive_offsets().
+
+        This method is called automatically before each planning operation via
+        _refine_curobo_world_collision().
+
+        Only processes articulated objects that match world_only_subffixes paths.
+        """
+
+        if not self._articulated_primitive_offsets:
+            return
+
+        articulated_link_poses = self._get_articulated_link_poses()
+        updated_count = 0
+
+        for obj_name, link_poses in articulated_link_poses.items():
+            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}"
+
+            # Update each primitive using cached offset
+            for primitive_name, (link_name, offset_pos, offset_quat) in self._articulated_primitive_offsets.items():
+                if not primitive_name.startswith(obj_prim_prefix):
+                    continue
+
+                if link_name not in link_poses:
+                    self._logger.warning(f"Link {link_name} not found in current articulation state")
+                    continue
+
+                link_pos, link_quat = link_poses[link_name]
+
+                # Compute primitive_pose = link_pose ⊕ offset
+                primitive_pos = link_pos + quat_apply(link_quat, offset_pos)
+                primitive_quat = quat_mul(link_quat, offset_quat)
+
+                self.motion_gen.world_coll_checker.update_obstacle_pose(
+                    primitive_name,
+                    Pose(
+                        position=self._to_curobo_device(primitive_pos),
+                        quaternion=self._to_curobo_device(primitive_quat),
+                    ),
+                    env_idx=self._env_id,
+                    update_cpu_reference=True,
+                )
+                updated_count += 1
+
+        if updated_count > 0:
+            self._logger.debug(f"Synced {updated_count} articulated obstacle primitives from Isaac Lab.")
 
     def _get_object_mappings(self) -> dict[str, list[str]]:
         """Map IsaacLab scene object names to cuRobo world obstacle names.
@@ -190,26 +410,16 @@ class CuroboPlanner:
         if self._cached_object_mappings is not None:
             return self._cached_object_mappings
 
-        world_model = self.motion_gen.world_coll_checker.world_model
         rigid_objects = self._env.scene.rigid_objects
 
-        env_prefix = f"/World/envs/env_{self._env_id}/Scene"
-        world_object_paths: list[str] = []
-        for primitive_type in self.primitive_types:
-            primitive_list = getattr(world_model, primitive_type, None)
-            if not primitive_list:
-                continue
-            for primitive in primitive_list:
-                primitive_name = primitive.name
-                if env_prefix in primitive_name:
-                    world_object_paths.append(primitive_name)
+        # Collect all primitives in the scene
+        all_scene_primitives = self._collect_primitives_by_prefix(self._env_scene_prefix)
 
+        # Map each rigid object to its primitives
         mappings: dict[str, list[str]] = {}
         for object_name in rigid_objects.keys():
-            mappings[object_name] = []
-            for world_path in world_object_paths:
-                if world_path.startswith(f"{env_prefix}/{object_name}"):
-                    mappings[object_name].append(world_path)
+            object_prefix = f"{self._env_scene_prefix}/{object_name}"
+            mappings[object_name] = [p for p in all_scene_primitives if p.startswith(object_prefix)]
 
         self._cached_object_mappings = mappings
         self._logger.debug(f"Object mappings built: {mappings}")
@@ -230,7 +440,21 @@ class CuroboPlanner:
         self._current_target_object = target_object
         self._logger.debug(f"Target object set to: {target_object}")
 
-    def sync_dynamic_objects(self) -> int:
+    def _refine_curobo_world_collision(self) -> None:
+        """Refine cuRobo world collision state before planning.
+
+        This method synchronizes all dynamic collision geometry:
+        - Rigid object poses (if enable_dynamic_world_sync is True)
+        - Articulated object link poses (if articulated offsets are cached)
+
+        Called automatically before each planning operation.
+        """
+
+        if self.cfg.enable_dynamic_world_sync:
+            self._sync_dynamic_objects()
+        self._sync_articulated_obstacles()
+
+    def _sync_dynamic_objects(self) -> int:
         """Synchronize dynamic object poses into cuRobo world model.
 
         If `only_enable_target_object_in_world_sync` is enabled:
@@ -322,9 +546,8 @@ class CuroboPlanner:
             JointState of the trajectory or None if planning failed
         """
 
-        # Dynamic object pose sync before planning (cheap, incremental).
-        if self.cfg.enable_dynamic_world_sync:
-            self.sync_dynamic_objects()
+        # Refine collision world before planning
+        self._refine_curobo_world_collision()
 
         if current_qd is None:
             current_qd = torch.zeros_like(current_q)
@@ -433,9 +656,8 @@ class CuroboPlanner:
             `retime_trajectory` does not support batch results.
         """
 
-        # Dynamic object pose sync before planning (cheap, incremental).
-        if self.cfg.enable_dynamic_world_sync:
-            self.sync_dynamic_objects()
+        # Refine collision world before planning
+        self._refine_curobo_world_collision()
 
         if target_pos.ndim != 2 or target_pos.shape[-1] != 3:
             raise ValueError(f"target_pos must have shape [K, 3], got {tuple(target_pos.shape)}")
@@ -513,9 +735,8 @@ class CuroboPlanner:
             result.rotation_error[k] for each batch index.
         """
 
-        # Dynamic object pose sync before planning (cheap, incremental).
-        if self.cfg.enable_dynamic_world_sync:
-            self.sync_dynamic_objects()
+        # Refine collision world before planning
+        self._refine_curobo_world_collision()
 
         if target_pos.ndim != 2 or target_pos.shape[-1] != 3:
             raise ValueError(f"target_pos must have shape [K, 3], got {tuple(target_pos.shape)}")
@@ -562,6 +783,9 @@ class CuroboPlanner:
         Returns:
             JointState of the trajectory or None if planning failed.
         """
+
+        # Refine collision world before planning
+        self._refine_curobo_world_collision()
 
         if current_qd is None:
             current_qd = torch.zeros_like(current_q)

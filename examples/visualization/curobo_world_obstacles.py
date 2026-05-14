@@ -208,7 +208,7 @@ def _visualize_world_obstacles(
         show_disabled: If True, show disabled obstacles in cyan (default: True)
     """
     planner = pipeline._motion_planner
-    planner.sync_dynamic_objects()
+    planner._refine_curobo_world_collision()
 
     world_model = planner.motion_gen.world_coll_checker.world_model
     collision_checker = planner.motion_gen.world_coll_checker
