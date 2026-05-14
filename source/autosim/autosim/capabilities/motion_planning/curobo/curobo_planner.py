@@ -12,7 +12,7 @@ from curobo.types.file_path import ContentPath
 from curobo.types.math import Pose
 from curobo.types.state import JointState
 from curobo.util.logger import setup_curobo_logger
-from curobo.util.usd_helper import UsdHelper
+from curobo.util.usd_helper import UsdHelper, get_prim_world_pose
 from curobo.util_file import get_assets_path, get_configs_path
 from curobo.wrap.reacher.motion_gen import (
     MotionGen,
@@ -22,6 +22,7 @@ from curobo.wrap.reacher.motion_gen import (
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
+from pxr import UsdGeom
 
 from autosim.core.logger import AutoSimLogger
 
@@ -171,8 +172,9 @@ class CuroboPlanner:
         This method is called once during initialization. It:
         1. Reads obstacle geometry from USD stage via cuRobo's UsdHelper
         2. Filters primitives based on collision_enable_substrings (if configured)
-        3. Loads the filtered world into cuRobo's collision checker
-        4. Builds offset cache for articulated object primitives
+        3. Applies ancestor prim scale correction for non-mesh primitives
+        4. Loads the filtered world into cuRobo's collision checker
+        5. Builds offset cache for articulated object primitives
         """
 
         robot_prim_path = self.cfg.robot_prim_path or f"{self._env_prim_path}/Robot"
@@ -196,6 +198,9 @@ class CuroboPlanner:
 
         # Remove primitives that don't match collision_enable_substrings before loading into cuRobo
         self._filter_world_config(world_cfg)
+
+        # Compensate for ancestor prim scale that cuRobo's USD reader misses on non-mesh primitives
+        self._apply_ancestor_scale_to_world_config(world_cfg)
 
         # Load filtered world geometry into cuRobo collision checker
         self._static_world_config = world_cfg.get_collision_check_world()
@@ -229,6 +234,67 @@ class CuroboPlanner:
                 continue
             filtered = [p for p in primitive_list if any(sub in p.name for sub in substrings)]
             setattr(world_cfg, attr, filtered)
+
+    def _apply_ancestor_scale_to_world_config(self, world_cfg) -> None:
+        """Apply ancestor prim scale to non-mesh primitives in WorldConfig.
+
+        cuRobo's USD reader handles scale differently per primitive type:
+        - Mesh: correctly applies full world scale (t_scale) to vertices — no fix needed
+        - Cuboid: uses prim's own xformOp:scale as dims — missing ancestor scale
+        - Sphere: uses prim's own xformOp:scale for radius — missing ancestor scale
+        - Cylinder/Capsule: ignores ALL scale (own + ancestor) — missing full world scale
+
+        This method reads the full world scale from USD and compensates for what cuRobo missed.
+        Modifies world_cfg in-place.
+        """
+
+        stage = self.usd_helper.stage
+        xform_cache = UsdGeom.XformCache()
+
+        for cuboid in world_cfg.cuboid or []:
+            prim = stage.GetPrimAtPath(cuboid.name)
+            if not prim.IsValid():
+                continue
+            _, t_scale = get_prim_world_pose(xform_cache, prim)
+            # cuRobo already applied own_scale as dims, so we only need ancestor contribution
+            own_scale = prim.GetAttribute("xformOp:scale").Get()
+            if own_scale is None:
+                continue
+            own_scale = list(own_scale)
+            ancestor_scale = [t / o if o != 0 else 1.0 for t, o in zip(t_scale, own_scale)]
+            if all(abs(s - 1.0) < 1e-6 for s in ancestor_scale):
+                continue
+            cuboid.dims = [d * s for d, s in zip(cuboid.dims, ancestor_scale)]
+
+        for sphere in world_cfg.sphere or []:
+            prim = stage.GetPrimAtPath(sphere.name)
+            if not prim.IsValid():
+                continue
+            _, t_scale = get_prim_world_pose(xform_cache, prim)
+            # cuRobo applied max(own_scale) to radius, so divide it out
+            own_scale = prim.GetAttribute("xformOp:scale").Get()
+            own_max = max(list(own_scale)) if own_scale is not None else 1.0
+            ancestor_factor = max(t_scale) / own_max if own_max != 0 else 1.0
+            if abs(ancestor_factor - 1.0) < 1e-6:
+                continue
+            sphere.radius *= ancestor_factor
+
+        for prim_obj in list(world_cfg.cylinder or []) + list(world_cfg.capsule or []):
+            prim = stage.GetPrimAtPath(prim_obj.name)
+            if not prim.IsValid():
+                continue
+            _, t_scale = get_prim_world_pose(xform_cache, prim)
+            if all(abs(s - 1.0) < 1e-6 for s in t_scale):
+                continue
+            # cuRobo applied NO scale at all for cylinder/capsule, so full t_scale is the correction
+            scale_z = t_scale[2]
+            scale_xy = max(t_scale[0], t_scale[1])
+            prim_obj.radius *= scale_xy
+            if hasattr(prim_obj, "height"):  # cylinder
+                prim_obj.height *= scale_z
+            if hasattr(prim_obj, "base"):  # capsule
+                prim_obj.base = [v * scale_z for v in prim_obj.base]
+                prim_obj.tip = [v * scale_z for v in prim_obj.tip]
 
     def _collect_primitives_by_prefix(self, prefix: str) -> list[str]:
         """Collect all primitive names from cuRobo world model that start with given prefix.
