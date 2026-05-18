@@ -68,6 +68,7 @@ class AutoSimPipeline(ABC):
 
         # load the environment and extra information
         self._env: ManagerBasedEnv = self.load_env()
+        self._env.reset()
         self._env_extra_info: EnvExtraInfo = self.get_env_extra_info()
         self._env_id = 0
 
