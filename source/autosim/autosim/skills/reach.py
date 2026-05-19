@@ -295,6 +295,9 @@ class ReachSkill(CuroboSkillBase):
             robot_root_pos_in_env, robot_root_quat_in_env, reach_target_pos_in_env, reach_target_quat_in_env
         )
         target_pose = torch.cat((reach_target_pos_in_root, reach_target_quat_in_root), dim=-1).squeeze(0)
+        self._logger.debug(
+            f"Reach target pose in robot root frame: {reach_target_pos_in_root}, {reach_target_quat_in_root}"
+        )
 
         activate_q, _ = self._build_activate_joint_state(
             robot.data.joint_names, robot.data.joint_pos[0], robot.data.joint_vel[0]
@@ -472,11 +475,20 @@ class ReachSkill(CuroboSkillBase):
             sim_idx = sim_joint_names.index(curobo_joint_name)
             joint_pos[sim_idx] = traj_pos[curobo_idx]
 
+        info = {}
+        if self.cfg.extra_cfg.return_link_poses_in_robot_root_frame:
+            activate_q, _ = self._build_activate_joint_state(state.sim_joint_names, joint_pos, None)
+            all_link_poses = self._planner.get_link_poses(activate_q, link_names=None)
+            info["link_poses_in_robot_root_frame"] = {
+                name: torch.cat([pose.position.squeeze(0), pose.quaternion.squeeze(0)])
+                for name, pose in all_link_poses.items()
+            }
+
         return SkillOutput(
             action=joint_pos,
             done=done,
             success=True,
-            info={},
+            info=info,
         )
 
     def reset(self) -> None:

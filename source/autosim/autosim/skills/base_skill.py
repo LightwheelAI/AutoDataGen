@@ -94,6 +94,9 @@ class CuroboSkillExtraCfg(SkillExtraCfg):
     extra_target_mode: str = "keep_current"
     """How additional cuRobo link goals are generated."""
 
+    return_link_poses_in_robot_root_frame: bool = True
+    """Whether to return the link poses in the robot root frame."""
+
     def __post_init__(self) -> None:
         supported_modes = {"keep_current", "keep_relative_offset", "keep_initial_relative_offset"}
         if self.extra_target_mode not in supported_modes:
