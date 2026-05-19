@@ -316,10 +316,70 @@ class CuroboPlanner:
                     primitives.append(primitive.name)
         return primitives
 
+    def _get_articulated_link_poses_from_usd(
+        self,
+    ) -> dict[str, dict[str, tuple[torch.Tensor, torch.Tensor]]]:
+        """Get initial link poses for all articulated objects from USD stage in robot root frame.
+
+        This method reads link poses directly from the USD stage, which represents the
+        initial/reference geometry. Used during initialization to compute primitive offsets
+        that are consistent with cuRobo's own primitive poses (also read from USD).
+
+        Returns:
+            Nested dict: {obj_name: {link_name: (pos, quat)}}
+            Poses are on cuRobo device and in robot root frame.
+        """
+        stage = self.usd_helper.stage
+        xform_cache = UsdGeom.XformCache()
+        world_only_subffixes_paths = [f"{self._env_prim_path}/{sub}" for sub in self.cfg.world_only_subffixes or []]
+
+        robot_root_pos_w = self._robot.data.root_pos_w[self._env_id].unsqueeze(0)  # [1, 3]
+        robot_root_quat_w = self._robot.data.root_quat_w[self._env_id].unsqueeze(0)  # [1, 4]
+
+        result = {}
+
+        for obj_path in world_only_subffixes_paths:
+            obj_name = obj_path.split("/")[-1]
+            obj_prim = stage.GetPrimAtPath(obj_path)
+            if not obj_prim.IsValid():
+                self._logger.warning(f"Articulated object prim not found at {obj_path}")
+                continue
+
+            link_poses = {}
+            for child_prim in obj_prim.GetChildren():
+                link_name = child_prim.GetName()
+                if not child_prim.IsValid():
+                    continue
+
+                link_mat, _ = get_prim_world_pose(xform_cache, child_prim)
+                link_pose = Pose.from_matrix(torch.tensor(link_mat, dtype=torch.float32).unsqueeze(0))
+                link_pos_w = link_pose.position  # [1, 3]
+                link_quat_w = link_pose.quaternion  # [1, 4]
+
+                link_pos_in_robot, link_quat_in_robot = subtract_frame_transforms(
+                    robot_root_pos_w,
+                    robot_root_quat_w,
+                    link_pos_w,
+                    link_quat_w,
+                )
+
+                link_poses[link_name] = (
+                    self._to_curobo_device(link_pos_in_robot.squeeze(0)),
+                    self._to_curobo_device(link_quat_in_robot.squeeze(0)),
+                )
+
+            if link_poses:
+                result[obj_name] = link_poses
+
+        return result
+
     def _get_articulated_link_poses(
         self,
     ) -> dict[str, dict[str, tuple[torch.Tensor, torch.Tensor]]]:
-        """Get current link poses for all articulated objects in robot root frame.
+        """Get current link poses for all articulated objects from Isaac Lab scene in robot root frame.
+
+        This method reads link poses from the Isaac Lab simulation state, which reflects
+        the current joint configuration. Used during runtime to sync articulated obstacles.
 
         Returns:
             Nested dict: {obj_name: {link_name: (pos, quat)}}
@@ -361,13 +421,13 @@ class CuroboPlanner:
         """Build offset cache for articulated primitives relative to their parent link.
 
         cuRobo only stores leaf primitives (mesh/cuboid/etc), not link-level prims. We read
-        each link's initial pose from Isaac Lab (which matches USD at init time), convert to
-        robot root frame, then compute offset from each leaf primitive's cuRobo pose. The
-        cached offsets are later used in _sync_articulated_obstacles() to update primitive
-        poses based on current link poses from Isaac Lab.
+        each link's initial pose from USD stage (which matches cuRobo's primitive poses),
+        convert to robot root frame, then compute offset from each leaf primitive's cuRobo
+        pose. The cached offsets are later used in _sync_articulated_obstacles() to update
+        primitive poses based on current link poses from Isaac Lab.
         """
 
-        articulated_link_poses = self._get_articulated_link_poses()
+        articulated_link_poses = self._get_articulated_link_poses_from_usd()
 
         for obj_name, link_poses in articulated_link_poses.items():
             obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}"
@@ -923,19 +983,22 @@ class CuroboPlanner:
 
         return self.get_link_poses(current_q, [link_name])[link_name]
 
-    def get_link_poses(self, current_q: torch.Tensor, link_names: list[str]) -> dict[str, Pose]:
-        """Get the poses of specific links in the robot root frame."""
+    def get_link_poses(self, current_q: torch.Tensor, link_names: list[str] | None = None) -> dict[str, Pose]:
+        """Get the poses of specific links in the robot root frame. Returns all links if link_names is None."""
 
         current_joint_state = JointState(
             position=self._to_curobo_device(current_q), joint_names=self.target_joint_names
         )
         kin_state = self.motion_gen.compute_kinematics(current_joint_state)
 
-        missing_link_names = [link_name for link_name in link_names if link_name not in kin_state.link_poses]
-        if missing_link_names:
-            raise ValueError(
-                f"Unknown cuRobo link name(s): {missing_link_names}. Available links:"
-                f" {list(kin_state.link_poses.keys())}"
-            )
+        if link_names is None:
+            return kin_state.link_poses
+        else:
+            missing_link_names = [link_name for link_name in link_names if link_name not in kin_state.link_poses]
+            if missing_link_names:
+                raise ValueError(
+                    f"Unknown cuRobo link name(s): {missing_link_names}. Available links:"
+                    f" {list(kin_state.link_poses.keys())}"
+                )
 
-        return {link_name: kin_state.link_poses[link_name] for link_name in link_names}
+            return {link_name: kin_state.link_poses[link_name] for link_name in link_names}
