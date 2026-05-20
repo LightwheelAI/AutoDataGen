@@ -25,21 +25,50 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
     move_offset: float = 0.1
     """The offset to move the end-effector."""
     move_axis: str = "+z"
-    """The axis to move the end-effector, which is in the eef frame. e.g. "+x", "+y", "+z", "-x", "-y", "-z"."""
+    """The axis to move the end-effector, which is in the eef frame.
+    Supports single axis (e.g. "+x", "-y") or multi-axis combinations (e.g. "+x+y", "+x-z")."""
 
     def __post_init__(self):
         """Post-initialize the relative reach skill extra configuration."""
 
         super().__post_init__()
-        assert self.move_axis in ["+x", "+y", "+z", "-x", "-y", "-z"], f"Invalid move axis: {self.move_axis}."
         self._axis_map = {
-            "+x": torch.tensor([1.0, 0.0, 0.0]),
-            "+y": torch.tensor([0.0, 1.0, 0.0]),
-            "+z": torch.tensor([0.0, 0.0, 1.0]),
-            "-x": torch.tensor([-1.0, 0.0, 0.0]),
-            "-y": torch.tensor([0.0, -1.0, 0.0]),
-            "-z": torch.tensor([0.0, 0.0, -1.0]),
+            "x": torch.tensor([1.0, 0.0, 0.0]),
+            "y": torch.tensor([0.0, 1.0, 0.0]),
+            "z": torch.tensor([0.0, 0.0, 1.0]),
         }
+
+    def get_direction_vector(self) -> torch.Tensor:
+        """Parse move_axis and compute the normalized direction vector.
+
+        This is computed on-demand to support dynamic modification of move_axis.
+
+        Returns:
+            Normalized direction vector in EE frame.
+        """
+        import re
+
+        pattern = r"([+-][xyz])"
+        matches = re.findall(pattern, self.move_axis)
+
+        if not matches:
+            raise ValueError(
+                f"Invalid move_axis format: '{self.move_axis}'. Expected format: '+x', '-y', '+x+y', '+x-z', etc."
+            )
+
+        direction_vector = torch.zeros(3)
+        for match in matches:
+            sign = 1.0 if match[0] == "+" else -1.0
+            axis = match[1]
+            if axis not in self._axis_map:
+                raise ValueError(f"Invalid axis '{axis}' in move_axis: '{self.move_axis}'")
+            direction_vector += sign * self._axis_map[axis]
+
+        norm = torch.linalg.norm(direction_vector)
+        if norm < 1e-6:
+            raise ValueError(f"move_axis '{self.move_axis}' results in zero direction vector")
+
+        return direction_vector / norm
 
 
 @configclass
@@ -83,7 +112,7 @@ class RelativeReachSkill(ReachSkill):
 
         # move the eef along the move axis by the move offset based on eef frame, and convert to robot root frame to get target pose
         isaaclab_device = state.device
-        move_offset_vector = self.cfg.extra_cfg._axis_map[self.cfg.extra_cfg.move_axis] * self.cfg.extra_cfg.move_offset
+        move_offset_vector = self.cfg.extra_cfg.get_direction_vector() * self.cfg.extra_cfg.move_offset
         offset_pos_in_ee = move_offset_vector.to(isaaclab_device).unsqueeze(0)
         offset_quat_in_ee = torch.tensor([1.0, 0.0, 0.0, 0.0], device=isaaclab_device).unsqueeze(0)
         ee_pos_in_robot_root, ee_quat_in_robot_root = target_pos.to(isaaclab_device), target_quat.to(isaaclab_device)

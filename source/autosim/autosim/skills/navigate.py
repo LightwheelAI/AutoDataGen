@@ -32,9 +32,9 @@ class NavigateSkillExtraCfg(SkillExtraCfg):
     waypoint_tolerance: float = 0.5
     """The tolerance of the waypoint."""
     goal_tolerance: float = 0.25
-    """The tolerance of the goal."""
+    """The tolerance of the distance to the goal."""
     yaw_tolerance: float = 0.01
-    """The tolerance of the yaw (radians)."""
+    """The tolerance of the yaw to the goal(radians)."""
     sampling_radius: float = 0.8
     """The sampling radius for the target position, in meters."""
     per_object_sampling_radius: dict[str, float] | None = None
