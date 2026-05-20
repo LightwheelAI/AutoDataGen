@@ -102,3 +102,7 @@ class ActionAdapterBase:
 
         self._logger.warning("Action adapter for skill not implemented. Using default apply.")
         return skill_output.action
+
+    def reset(self) -> None:
+        """Reset the action adapter."""
+        pass

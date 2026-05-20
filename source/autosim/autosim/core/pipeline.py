@@ -134,6 +134,7 @@ class AutoSimPipeline(ABC):
 
         self._env.reset()
         self._env_extra_info.reset()
+        self._action_adapter.reset()
 
         self._generated_actions = []
         self._last_action = torch.zeros(self._env.action_space.shape, device=self._env.device)
