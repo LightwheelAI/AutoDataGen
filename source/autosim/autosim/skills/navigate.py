@@ -185,6 +185,10 @@ class NavigateSkill(Skill):
             robot_pos_w = state.robot_base_pose.detach().cpu().numpy()
             target_pos_candidate = goal_pos.detach().cpu().numpy()
 
+            self._logger.debug(f"object position in world frame: {obj_pos_w}")
+            self._logger.debug(f"robot position in world frame: {robot_pos_w}")
+            self._logger.debug(f"target position candidate: {target_pos_candidate}")
+
             debug_visualize_goal_sampling(
                 occupancy_map=self._occupancy_map,
                 obj_pos_w=obj_pos_w,
