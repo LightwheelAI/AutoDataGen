@@ -95,10 +95,19 @@ def debug_visualize_goal_sampling(
         return
 
     import matplotlib.pyplot as plt  # type: ignore[import]
+    from matplotlib.colors import ListedColormap  # type: ignore[import]
+    from matplotlib.patches import Patch  # type: ignore[import]
 
     occ = occupancy_map.occupancy_map.cpu().numpy()
     origin_x, origin_y = occupancy_map.origin
     resolution = float(occupancy_map.resolution)
+
+    # Build a 3-class display map: 0 = free, 1 = original obstacle, 2 = inflation buffer.
+    display_map = occ.astype(np.int16).copy()
+    inflation_mask_np: np.ndarray | None = None
+    if occupancy_map.inflation_mask is not None:
+        inflation_mask_np = occupancy_map.inflation_mask.cpu().numpy().astype(bool)
+        display_map[inflation_mask_np] = 2
 
     # object position in world frame -> grid coordinates
     ox = float(obj_pos_w[0])
@@ -117,8 +126,11 @@ def debug_visualize_goal_sampling(
     # sampling angles
     angles = np.linspace(sample_range[0], sample_range[1], num_samples, endpoint=False)
 
+    # Sampling-point classification by display map.
     free_x, free_y = [], []
-    occ_x, occ_y = [], []
+    original_x, original_y = [], []
+    inflated_x, inflated_y = [], []
+    oob_x, oob_y = [], []
 
     for angle in angles:
         cx = ox + sampling_radius * np.cos(angle)
@@ -127,23 +139,35 @@ def debug_visualize_goal_sampling(
         gx = int((cx - origin_x) / resolution)
         gy = int((cy - origin_y) / resolution)
 
-        # also visualize out of bounds, marked as "occupied"
         if 0 <= gy < occ.shape[0] and 0 <= gx < occ.shape[1]:
-            if occ[gy, gx] == 0:
+            cell_value = display_map[gy, gx]
+            if cell_value == 0:
                 free_x.append(gx)
                 free_y.append(gy)
+            elif cell_value == 2:
+                inflated_x.append(gx)
+                inflated_y.append(gy)
             else:
-                occ_x.append(gx)
-                occ_y.append(gy)
+                original_x.append(gx)
+                original_y.append(gy)
         else:
-            occ_x.append(gx)
-            occ_y.append(gy)
+            oob_x.append(gx)
+            oob_y.append(gy)
 
     # Reuse the same window across calls and clear it to avoid drawing overlaps.
     fig = plt.figure("NavigateSkill Goal Sampling", figsize=(6, 6))
     fig.clear()
     ax = fig.add_subplot(1, 1, 1)
-    ax.imshow(occ, origin="lower", cmap="gray_r", interpolation="nearest")
+    # 0=free (white), 1=original obstacle (black), 2=inflation buffer (orange)
+    cmap = ListedColormap(["#ffffff", "#202020", "#ff8c1a"])
+    ax.imshow(display_map, origin="lower", cmap=cmap, vmin=0, vmax=2, interpolation="nearest")
+
+    legend_handles = [
+        Patch(facecolor="#202020", label="original obstacle"),
+    ]
+    if inflation_mask_np is not None:
+        radius_str = f" (r={occupancy_map.inflation_radius:.2f}m)"
+        legend_handles.append(Patch(facecolor="#ff8c1a", label=f"robot inflation{radius_str}"))
 
     # object
     if 0 <= ogy < occ.shape[0] and 0 <= ogx < occ.shape[1]:
@@ -154,11 +178,23 @@ def debug_visualize_goal_sampling(
         if 0 <= rgy < occ.shape[0] and 0 <= rgx < occ.shape[1]:
             ax.scatter(rgx, rgy, c="blue", marker="o", s=60, label="robot")
 
-    # sampling points (free = green points, occupied/out = red crosses)
+    # sampling points
     if free_x:
         ax.scatter(free_x, free_y, c="green", s=30, label="free samples")
-    if occ_x:
-        ax.scatter(occ_x, occ_y, c="red", marker="x", s=30, label="occupied / oob samples")
+    if inflated_x:
+        ax.scatter(
+            inflated_x,
+            inflated_y,
+            c="orange",
+            marker="x",
+            s=40,
+            linewidths=2,
+            label="blocked by inflation",
+        )
+    if original_x:
+        ax.scatter(original_x, original_y, c="red", marker="x", s=40, linewidths=2, label="blocked by obstacle")
+    if oob_x:
+        ax.scatter(oob_x, oob_y, c="gray", marker="x", s=30, label="out-of-bounds samples")
 
     # final chosen candidate (if any)
     if target_pos_candidate is not None:
@@ -172,7 +208,9 @@ def debug_visualize_goal_sampling(
     ax.set_title("Goal Sampling around Object")
     ax.set_xlabel("x (grid index)")
     ax.set_ylabel("y (grid index)")
-    ax.legend(loc="upper right")
+    # Combine map-class legend (patches) with scatter legend.
+    scatter_handles, scatter_labels = ax.get_legend_handles_labels()
+    ax.legend(handles=legend_handles + list(scatter_handles), loc="upper right")
     fig.tight_layout()
     fig.show()
     # Let the GUI event loop process draw/update events even if the main thread

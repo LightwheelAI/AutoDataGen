@@ -259,7 +259,9 @@ class OccupancyMap:
     """Occupancy map of the environment."""
 
     occupancy_map: torch.Tensor
-    """The occupancy map of the environment. 2D array of shape[height, width] 0: free, 1: occupied, -1: unknown."""
+    """The combined occupancy map of the environment, used for planning. 2D array of shape
+    [height, width] with values 0: free, 1: occupied (covers both original obstacles and the
+    inflation buffer), -1: unknown."""
     resolution: float
     """The resolution of the occupancy map, cell size in meters."""
     origin: tuple[float, float]
@@ -268,3 +270,8 @@ class OccupancyMap:
     """The bounds of the occupancy map."""
     floor_bounds: MapBounds
     """The bounds of the floor."""
+    inflation_mask: torch.Tensor | None = None
+    """Cells added purely by robot-radius inflation (True = inflation buffer, False = either free
+    or original obstacle). Same shape as ``occupancy_map``. ``None`` if inflation was disabled."""
+    inflation_radius: float = 0.0
+    """The total inflation radius applied (meters): ``robot_radius + extra_inflation_margin``."""

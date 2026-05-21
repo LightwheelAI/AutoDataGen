@@ -7,6 +7,7 @@ import torch
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils import configclass
 from pxr import Usd, UsdGeom
+from scipy.ndimage import binary_dilation
 
 from autosim.core.logger import AutoSimLogger
 from autosim.core.types import MapBounds, OccupancyMap
@@ -39,6 +40,9 @@ class OccupancyMapCfg:
     """The tolerance for the height sampling."""
     mesh_max_points: int = 5000
     """Max number of mesh vertices used for footprint estimation (downsample if larger)."""
+    robot_radius: float = 0.25
+    """Robot footprint radius in meters used to inflate obstacles. Set to 0.0 to disable inflation
+    (point-robot assumption). For non-circular bases, use the bounding-circle radius (conservative)."""
 
 
 # -----------------------------------------------------------------------------
@@ -534,10 +538,32 @@ def get_occupancy_map(env: ManagerBasedEnv, cfg: OccupancyMapCfg) -> OccupancyMa
 
         _rasterize_convex_poly(occupancy_map, poly, map_min_x, map_min_y, cfg.cell_size, map_height, map_width)
 
+    # Inflate obstacles by the robot footprint radius (+ optional extra margin).
+    # Cells produced by inflation are tracked separately so the visualization can distinguish
+    # "original geometry" vs. "robot-radius safety buffer", but for planning purposes the combined
+    # map treats both as occupied.
+    inflation_radius = float(cfg.robot_radius)
+    inflation_mask_np: np.ndarray | None = None
+    if inflation_radius > 0.0:
+        inflation_cells = int(np.ceil(inflation_radius / cfg.cell_size))
+        if inflation_cells > 0:
+            original = occupancy_map.astype(bool)
+            inflated = binary_dilation(original, iterations=inflation_cells)
+            inflation_mask_np = np.logical_and(inflated, np.logical_not(original))
+            occupancy_map = inflated.astype(np.int8)
+            _logger.info(
+                f"Inflated obstacles by radius={inflation_radius:.3f}m ({inflation_cells} cells); "
+                f"original={int(original.sum())} cells, inflation buffer={int(inflation_mask_np.sum())} cells"
+            )
+
+    inflation_mask_t = torch.from_numpy(inflation_mask_np).to(env.device) if inflation_mask_np is not None else None
+
     return OccupancyMap(
         occupancy_map=torch.from_numpy(occupancy_map).to(env.device),
         origin=(map_min_x, map_min_y),
         resolution=cfg.cell_size,
         map_bounds=MapBounds(min_x=map_min_x, max_x=map_max_x, min_y=map_min_y, max_y=map_max_y),
         floor_bounds=MapBounds(min_x=min_bound[0], max_x=max_bound[0], min_y=min_bound[1], max_y=max_bound[1]),
+        inflation_mask=inflation_mask_t,
+        inflation_radius=inflation_radius if inflation_mask_np is not None else 0.0,
     )
