@@ -43,6 +43,8 @@ class OccupancyMapCfg:
     robot_radius: float = 0.25
     """Robot footprint radius in meters used to inflate obstacles. Set to 0.0 to disable inflation
     (point-robot assumption). For non-circular bases, use the bounding-circle radius (conservative)."""
+    skip_path_substrings: tuple[str, ...] = ("light", "camera", "looks", "material", "sites")
+    """Lowercased substrings; any prim whose path contains one of these is excluded from the occupancy map.."""
 
 
 # -----------------------------------------------------------------------------
@@ -59,19 +61,16 @@ def _get_prim_bounds(stage, prim_path: str, verbose: bool = True) -> tuple[np.nd
 
     prim = stage.GetPrimAtPath(prim_path)
 
-    # Get bounding box
-    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), includedPurposes=[UsdGeom.Tokens.default_])
-    bbox = bbox_cache.ComputeWorldBound(prim)
-
-    # Aligned bounding box range
-    aligned_box = bbox.ComputeAlignedBox()
-    min_point = aligned_box.GetMin()
-    max_point = aligned_box.GetMax()
+    bbox_cache = _make_bbox_cache()
+    aabb = _world_aabb_or_none(bbox_cache, prim)
+    if aabb is None:
+        raise ValueError(f"Prim '{prim_path}' has empty or invalid world bounds")
+    min_arr, max_arr = aabb
 
     if verbose:
-        _logger.info(f"Prim '{prim_path}' bounds: min={list(min_point)}, max={list(max_point)}")
+        _logger.info(f"Prim '{prim_path}' bounds: min={min_arr.tolist()}, max={max_arr.tolist()}")
 
-    return np.array([min_point[0], min_point[1], min_point[2]]), np.array([max_point[0], max_point[1], max_point[2]])
+    return min_arr, max_arr
 
 
 def _is_geometry_prim(prim: Usd.Prim) -> bool:
@@ -83,6 +82,48 @@ def _is_geometry_prim(prim: Usd.Prim) -> bool:
         or prim.IsA(UsdGeom.Sphere)
         or prim.IsA(UsdGeom.Capsule)
     )
+
+
+def _make_bbox_cache(time_code: Usd.TimeCode | None = None) -> UsdGeom.BBoxCache:
+    """Create a BBoxCache that covers all USD purposes.
+
+    Collision-only meshes (e.g. ``*/Collisions/*`` under Isaac Lab assets) are typically authored
+    with ``purpose=guide`` or ``proxy`` rather than ``default``. A BBoxCache that includes only
+    ``default`` returns an empty range for these prims, which surfaces as a sentinel AABB of
+    ``[+FLT_MAX, -FLT_MAX]`` and breaks downstream height / extent filters. Including all four
+    purposes keeps the cache valid for both visual and collision geometry.
+    """
+    if time_code is None:
+        time_code = Usd.TimeCode.Default()
+    return UsdGeom.BBoxCache(
+        time_code,
+        includedPurposes=[
+            UsdGeom.Tokens.default_,
+            UsdGeom.Tokens.render,
+            UsdGeom.Tokens.proxy,
+            UsdGeom.Tokens.guide,
+        ],
+    )
+
+
+def _world_aabb_or_none(bbox_cache: UsdGeom.BBoxCache, prim: Usd.Prim) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return ``(min_xyz, max_xyz)`` of a prim's world-space AABB, or None if it is empty/invalid.
+
+    USD returns an empty ``Gf.Range3d`` (``min > max``, components saturated to ``±FLT_MAX``) when
+    a prim has no extent, is hidden, or its purpose is outside the cache's whitelist. We collapse
+    those cases into ``None`` so callers can simply skip the prim.
+    """
+    bbox = bbox_cache.ComputeWorldBound(prim)
+    aligned = bbox.ComputeAlignedBox()
+    if aligned.IsEmpty():
+        return None
+    pmin = aligned.GetMin()
+    pmax = aligned.GetMax()
+    pmin_arr = np.array([pmin[0], pmin[1], pmin[2]], dtype=np.float64)
+    pmax_arr = np.array([pmax[0], pmax[1], pmax[2]], dtype=np.float64)
+    if not (np.all(np.isfinite(pmin_arr)) and np.all(np.isfinite(pmax_arr))):
+        return None
+    return pmin_arr, pmax_arr
 
 
 # -----------------------------------------------------------------------------
@@ -181,40 +222,36 @@ def _collect_candidate_prim_paths(
     sample_height_min: float,
     sample_height_max: float,
     min_xy_extent: float = 0.01,
+    skip_path_substrings: tuple[str, ...] = (),
 ) -> list[str]:
-    """Collect candidate obstacle prim paths from the scene (coarse filtering only)."""
+    """Collect candidate obstacle prim paths from the scene (coarse filtering only).
 
-    def xform_has_geometry_child(xform_prim: Usd.Prim) -> bool:
-        """Match previous behavior: only consider direct children.
-
-        This avoids pulling in very top-level container Xforms (e.g., env roots) whose
-        geometry only exists deeper in the hierarchy.
-        """
-        return any(_is_geometry_prim(child) for child in xform_prim.GetChildren())
+    Only direct geometry prims (Mesh / Cube / Cylinder / Sphere / Capsule) are returned.
+    Xform containers are skipped here — ``stage.Traverse()`` already visits the leaf geometry
+    prims they hold, so going through containers would just produce duplicates and force a
+    second expansion pass downstream.
+    """
 
     candidate_paths: list[str] = []
-    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), includedPurposes=[UsdGeom.Tokens.default_])
+    bbox_cache = _make_bbox_cache()
+    skip_lc = tuple(s.lower() for s in skip_path_substrings)
 
     for prim in stage.Traverse():
         path_str = str(prim.GetPath())
 
         if floor_prim_path in path_str or "Robot" in path_str or "robot" in path_str.lower():
             continue
-        if any(skip in path_str.lower() for skip in ["light", "camera", "looks", "material"]):
+        if skip_lc and any(skip in path_str.lower() for skip in skip_lc):
             continue
 
-        if _is_geometry_prim(prim):
-            pass
-        elif prim.IsA(UsdGeom.Xform):
-            if not xform_has_geometry_child(prim):
-                continue
-        else:
+        if not _is_geometry_prim(prim):
             continue
 
-        bbox = bbox_cache.ComputeWorldBound(prim)
-        aligned = bbox.ComputeAlignedBox()
-        prim_min = aligned.GetMin()
-        prim_max = aligned.GetMax()
+        aabb = _world_aabb_or_none(bbox_cache, prim)
+        if aabb is None:
+            _logger.debug(f"Skipping prim with empty/invalid world bounds: {path_str}")
+            continue
+        prim_min, prim_max = aabb
 
         if prim_min[2] > sample_height_max or prim_max[2] < sample_height_min:
             continue
@@ -227,24 +264,6 @@ def _collect_candidate_prim_paths(
         candidate_paths.append(path_str)
 
     return candidate_paths
-
-
-def _expand_to_geometry_prims(prim: Usd.Prim) -> list[Usd.Prim]:
-    """Expand a prim to leaf geometry prims."""
-
-    if _is_geometry_prim(prim):
-        return [prim]
-    if prim.IsA(UsdGeom.Xform):
-        out: list[Usd.Prim] = []
-        stack = list(prim.GetChildren())
-        while stack:
-            p = stack.pop()
-            if _is_geometry_prim(p):
-                out.append(p)
-            elif p.IsA(UsdGeom.Xform):
-                stack.extend(p.GetChildren())
-        return out
-    return []
 
 
 # -----------------------------------------------------------------------------
@@ -391,6 +410,8 @@ def _fallback_bbox_footprint_poly_xy(
 
     local_bbox = bbox_cache.ComputeLocalBound(prim)
     box = local_bbox.GetRange()
+    if box.IsEmpty():
+        return None
     mat = xform_cache.GetLocalToWorldTransform(prim)
     bmin = box.GetMin()
     bmax = box.GetMax()
@@ -481,31 +502,30 @@ def get_occupancy_map(env: ManagerBasedEnv, cfg: OccupancyMapCfg) -> OccupancyMa
     _logger.info(f"Sampling height range: [{sample_height_min:.2f}, {sample_height_max:.2f}]")
 
     candidate_paths = _collect_candidate_prim_paths(
-        stage, floor_prim_path, sample_height_min, sample_height_max, cfg.min_xy_extent
+        stage,
+        floor_prim_path,
+        sample_height_min,
+        sample_height_max,
+        cfg.min_xy_extent,
+        tuple(cfg.skip_path_substrings),
     )
     _logger.info(f"Found {len(candidate_paths)} candidate prims")
 
     time_code = Usd.TimeCode.Default()
-    bbox_cache = UsdGeom.BBoxCache(time_code, includedPurposes=[UsdGeom.Tokens.default_])
+    bbox_cache = _make_bbox_cache(time_code)
     xform_cache = UsdGeom.XformCache(time_code)
 
-    geom_prims: list[Usd.Prim] = []
     for path_str in candidate_paths:
         prim = stage.GetPrimAtPath(path_str)
         if not prim.IsValid():
             continue
-        geom_prims.extend(_expand_to_geometry_prims(prim))
-    _logger.info(f"Expanded to {len(geom_prims)} geometry prims")
 
-    for prim in geom_prims:
-        if not prim.IsValid():
+        # Coarse height filter (redundant with the candidate-collection pass for the common case,
+        # kept for safety in case bbox cache state diverges between the two traversals).
+        aabb = _world_aabb_or_none(bbox_cache, prim)
+        if aabb is None:
             continue
-
-        # Coarse height filter
-        bbox = bbox_cache.ComputeWorldBound(prim)
-        aligned = bbox.ComputeAlignedBox()
-        pmin = aligned.GetMin()
-        pmax = aligned.GetMax()
+        pmin, pmax = aabb
         if pmin[2] > sample_height_max or pmax[2] < sample_height_min:
             continue
 
