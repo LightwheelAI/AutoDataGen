@@ -123,3 +123,42 @@ class CuroboSkillBase(Skill):
 
         if self.cfg.extra_cfg.debug_target_pose:
             visualize_marker("target_pose", self._target_poses["target_pose"])
+
+    def _build_activate_joint_state(
+        self, full_sim_joint_names: list[str], full_sim_q: torch.Tensor, full_sim_qd: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Extract the planner's active joint state from full simulation joint state.
+
+        cuRobo typically plans over a subset of "active joints" (`self._planner.target_joint_names`).
+        This helper slices the full simulation joint vectors into that active subset, ordered exactly
+        as the planner expects, returning `q` and (optionally) `qd`.
+
+        Args:
+            full_sim_joint_names: Joint name list from simulation (index-aligned with `full_sim_q`/`full_sim_qd`).
+            full_sim_q: Full simulation joint positions, shape `[num_sim_joints]`.
+            full_sim_qd: Optional full simulation joint velocities, shape `[num_sim_joints]`.
+
+        Returns:
+            A tuple `(activate_q, activate_qd)` where:
+            - `activate_q` is ordered by `self._planner.target_joint_names`, shape `[num_active_joints]`.
+            - `activate_qd` is the corresponding velocities if `full_sim_qd` is provided; otherwise `None`.
+
+        Raises:
+            ValueError: If any planner target joint is missing from `full_sim_joint_names`.
+        """
+
+        activate_q, activate_qd = [], [] if full_sim_qd is not None else None
+        for joint_name in self._planner.target_joint_names:
+            if joint_name not in full_sim_joint_names:
+                raise ValueError(
+                    f"Joint {joint_name} in planner activate joints is not in the full simulation joint names."
+                )
+            sim_joint_idx = full_sim_joint_names.index(joint_name)
+            activate_q.append(full_sim_q[sim_joint_idx])
+            if full_sim_qd is not None and activate_qd is not None:
+                activate_qd.append(full_sim_qd[sim_joint_idx])
+
+        activate_q_tensor = torch.stack(activate_q, dim=0)
+        if activate_qd is None:
+            return activate_q_tensor, None
+        return activate_q_tensor, torch.stack(activate_qd, dim=0)

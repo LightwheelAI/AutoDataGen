@@ -128,11 +128,20 @@ class RetractSkill(CuroboSkillBase):
             sim_idx = sim_joint_names.index(curobo_joint_name)
             joint_pos[sim_idx] = traj_pos[curobo_idx]
 
+        info = {}
+        if self.cfg.extra_cfg.return_link_poses_in_robot_root_frame:
+            activate_q, _ = self._build_activate_joint_state(state.sim_joint_names, joint_pos, None)
+            all_link_poses = self._planner.get_link_poses(activate_q, link_names=None)
+            info["link_poses_in_robot_root_frame"] = {
+                name: torch.cat([pose.position.squeeze(0), pose.quaternion.squeeze(0)])
+                for name, pose in all_link_poses.items()
+            }
+
         return SkillOutput(
             action=joint_pos,
             done=done,
             success=True,
-            info={},
+            info=info,
         )
 
     def reset(self) -> None:
