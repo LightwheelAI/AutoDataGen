@@ -62,11 +62,13 @@ Output the task decomposition result in JSON format with the following fields:
     ```
     moveto(object) → reach(object) → grasp(object) → lift(object)
     ```
+    You should set specific target_object for each skill.
 
 2. **Pick-and-Place Pattern** (for moving objects to specific location):
     ```
-    moveto(object) → reach(object) → grasp(object) → lift(object) → [moveto(target)](optional) → reach(target) → ungrasp(object)
+    moveto(object) → reach(object) → grasp(object) → lift(object) → [moveto(target)](optional) → reach(target) → ungrasp(object) → [retract(none)](optional)
     ```
+    You should set specific target_object for each skill, except for the retract skill.
 
 3. **Press Pattern** (for pressing buttons):
     ```

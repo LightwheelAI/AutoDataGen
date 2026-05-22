@@ -247,8 +247,8 @@ class LLMDecomposer(Decomposer):
                     raise ValueError(f"Invalid skill type: {skill['skill_type']}. Must be one of {self._atomic_skills}")
                 if valid_objects is not None:
                     target = skill.get("target_object", "")
-                    if target and target not in valid_objects:
+                    if target and target not in valid_objects and target.lower() != "none":
                         raise ValueError(
                             f"Invalid target_object '{target}' for skill '{skill['skill_type']}'. "
-                            f"Must be one of: {sorted(valid_objects)}"
+                            f"Must be one of: {sorted(valid_objects)} or 'none'"
                         )

@@ -190,7 +190,7 @@ class SkillInfo:
     skill_type: str
     """The type of the skill, must be one of the atomic skills"""
     target_object: str
-    """The target object of the skill."""
+    """The target object of the skill. "none" if the skill has no target object."""
     target_type: str
     """The type of the target. "object", "fixture", "interactive_element", or "position"."""
     description: str
