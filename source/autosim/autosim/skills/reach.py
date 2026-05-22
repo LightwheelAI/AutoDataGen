@@ -286,6 +286,7 @@ class ReachSkill(CuroboSkillBase):
         self._logger.debug(f"Reach target position in environment: {reach_target_pos_in_env}")
         self._logger.debug(f"Reach target quaternion in environment: {reach_target_quat_in_env}")
         self._target_poses["target_pose"] = torch.cat((reach_target_pos_in_env, reach_target_quat_in_env), dim=-1)
+        self.visualize_debug_target_pose()
 
         robot = env.scene[env_extra_info.robot_name]
         robot_root_pos_in_env = robot.data.root_pose_w[:, :3]
