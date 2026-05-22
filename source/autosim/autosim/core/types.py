@@ -46,6 +46,8 @@ class SkillGoal:
     """The target pose of the skill."""
     extra_target_poses: dict[str, torch.Tensor] | None = None
     """The target poses of the extra end-effectors. dict[link_name, target_pose]."""
+    info: dict[str, Any] = field(default_factory=dict)
+    """The information of the skill goal."""
 
 
 @dataclass
@@ -94,6 +96,9 @@ class EnvExtraInfo:
     object_navigate_sample_range: dict[str, tuple[float, float]] = field(default_factory=dict)
     """The sample range for the navigate skill. each object can have a tuple of (min_angle, max_angle) in radians."""
 
+    object_relative_reach_axis: dict[str, dict[str, str]] = field(default_factory=dict)
+    """The relative reach axis for the relative reach skill. dict[object_name, dict[relative_reach_skill_name, axis]]."""
+
     cached_initial_extra_target_offsets: dict[str, tuple[torch.Tensor, torch.Tensor]] | None = None
     """Cached primary-frame offsets for extra target links, reused across multiple reach-like skills."""
 
@@ -110,6 +115,9 @@ class EnvExtraInfo:
 
     def get_navigate_sample_range(self, object_name: str) -> tuple[float, float]:
         return self.object_navigate_sample_range.get(object_name, (0.0, 2 * np.pi))
+
+    def get_relative_reach_axis(self, object_name: str, relative_reach_skill_name: str) -> str:
+        return self.object_relative_reach_axis.get(object_name, {}).get(relative_reach_skill_name)
 
 
 @dataclass

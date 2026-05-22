@@ -38,7 +38,7 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
             "z": torch.tensor([0.0, 0.0, 1.0]),
         }
 
-    def get_direction_vector(self) -> torch.Tensor:
+    def get_direction_vector(self, move_axis: str) -> torch.Tensor:
         """Parse move_axis and compute the normalized direction vector.
 
         This is computed on-demand to support dynamic modification of move_axis.
@@ -49,11 +49,11 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
         import re
 
         pattern = r"([+-][xyz])"
-        matches = re.findall(pattern, self.move_axis)
+        matches = re.findall(pattern, move_axis)
 
         if not matches:
             raise ValueError(
-                f"Invalid move_axis format: '{self.move_axis}'. Expected format: '+x', '-y', '+x+y', '+x-z', etc."
+                f"Invalid move_axis format: '{move_axis}'. Expected format: '+x', '-y', '+x+y', '+x-z', etc."
             )
 
         direction_vector = torch.zeros(3)
@@ -61,12 +61,12 @@ class RelativeReachSkillExtraCfg(CuroboSkillExtraCfg):
             sign = 1.0 if match[0] == "+" else -1.0
             axis = match[1]
             if axis not in self._axis_map:
-                raise ValueError(f"Invalid axis '{axis}' in move_axis: '{self.move_axis}'")
+                raise ValueError(f"Invalid axis '{axis}' in move_axis: '{move_axis}'")
             direction_vector += sign * self._axis_map[axis]
 
         norm = torch.linalg.norm(direction_vector)
         if norm < 1e-6:
-            raise ValueError(f"move_axis '{self.move_axis}' results in zero direction vector")
+            raise ValueError(f"move_axis '{move_axis}' results in zero direction vector")
 
         return direction_vector / norm
 
@@ -91,7 +91,11 @@ class RelativeReachSkill(ReachSkill):
     ) -> SkillGoal:
         """Return the target object of the relative reach skill."""
 
-        return SkillGoal(target_object=skill_info.target_object)
+        relative_reach_axis = env_extra_info.get_relative_reach_axis(skill_info.target_object, self.cfg.name)
+        if relative_reach_axis is None:
+            relative_reach_axis = self.cfg.extra_cfg.move_axis
+
+        return SkillGoal(target_object=skill_info.target_object, info=dict(move_axis=relative_reach_axis))
 
     def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
         """Execute the plan of the relative reach skill."""
@@ -112,7 +116,9 @@ class RelativeReachSkill(ReachSkill):
 
         # move the eef along the move axis by the move offset based on eef frame, and convert to robot root frame to get target pose
         isaaclab_device = state.device
-        move_offset_vector = self.cfg.extra_cfg.get_direction_vector() * self.cfg.extra_cfg.move_offset
+        move_offset_vector = (
+            self.cfg.extra_cfg.get_direction_vector(goal.info["move_axis"]) * self.cfg.extra_cfg.move_offset
+        )
         offset_pos_in_ee = move_offset_vector.to(isaaclab_device).unsqueeze(0)
         offset_quat_in_ee = torch.tensor([1.0, 0.0, 0.0, 0.0], device=isaaclab_device).unsqueeze(0)
         ee_pos_in_robot_root, ee_quat_in_robot_root = target_pos.to(isaaclab_device), target_quat.to(isaaclab_device)
