@@ -35,6 +35,7 @@ Notes
 from __future__ import annotations
 
 import argparse
+import traceback
 
 import numpy as np
 import torch
@@ -405,43 +406,49 @@ def main():
     pipeline.reset_env()
     _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii)
 
-    for subtask in decompose_result.subtasks:
-        for skill_info in subtask.skills:
-            skill = SkillRegistry.create(
-                skill_info.skill_type, pipeline.cfg.skills.get(skill_info.skill_type).extra_cfg
-            )
+    try:
+        for subtask in decompose_result.subtasks:
+            for skill_info in subtask.skills:
+                skill = SkillRegistry.create(
+                    skill_info.skill_type, pipeline.cfg.skills.get(skill_info.skill_type).extra_cfg
+                )
 
-            if pipeline._action_adapter.should_skip_apply(skill):
-                pipeline._logger.info(f"Skill {skill_info.skill_type} skipped.")
-                continue
+                if pipeline._action_adapter.should_skip_apply(skill):
+                    pipeline._logger.info(f"Skill {skill_info.skill_type} skipped.")
+                    continue
 
-            goal = skill.extract_goal_from_info(skill_info, pipeline._env, pipeline._env_extra_info)
-            success, steps, episode_done = _execute_single_skill_with_viz(
-                pipeline,
-                skill,
-                goal,
-                vm_spheres,
-                vm_ee,
-                unique_radii,
-                env_id,
-                curobo_link_name=args_cli.curobo_link_name,
-                isaaclab_link_name=args_cli.isaaclab_link_name,
-            )
+                goal = skill.extract_goal_from_info(skill_info, pipeline._env, pipeline._env_extra_info)
+                success, steps, episode_done = _execute_single_skill_with_viz(
+                    pipeline,
+                    skill,
+                    goal,
+                    vm_spheres,
+                    vm_ee,
+                    unique_radii,
+                    env_id,
+                    curobo_link_name=args_cli.curobo_link_name,
+                    isaaclab_link_name=args_cli.isaaclab_link_name,
+                )
 
-            if not success:
-                pipeline._logger.error(f"Skill {skill_info.skill_type} failed after {steps} steps.")
-                raise ValueError(f"Skill {skill_info.skill_type} failed after {steps} steps.")
-            if episode_done:
-                pipeline._logger.info(f"Episode completed during skill {skill_info.skill_type}.({steps} steps)")
-                pipeline._logger.info("Pipeline execution completed.")
-                while simulation_app.is_running():
-                    pipeline._env.sim.render()
-                return
-            pipeline._logger.info(f"Skill {skill_info.skill_type} done ({steps} steps).")
+                if not success:
+                    pipeline._logger.error(f"Skill {skill_info.skill_type} failed after {steps} steps.")
+                    raise ValueError(f"Skill {skill_info.skill_type} failed after {steps} steps.")
+                if episode_done:
+                    pipeline._logger.info(f"Episode completed during skill {skill_info.skill_type}.({steps} steps)")
+                    pipeline._logger.info("Pipeline execution completed.")
+                    while simulation_app.is_running():
+                        pipeline._env.sim.render()
+                    return
+                pipeline._logger.info(f"Skill {skill_info.skill_type} done ({steps} steps).")
 
-        pipeline._logger.info(f"Subtask {subtask.subtask_name} completed.")
+            pipeline._logger.info(f"Subtask {subtask.subtask_name} completed.")
 
-    pipeline._logger.info("Pipeline execution completed.")
+        pipeline._logger.info("Pipeline execution completed.")
+    except Exception as e:
+        print(f"Error: {e}")
+        print(traceback.format_exc())
+        while simulation_app.is_running():
+            pipeline._env.sim.render()
 
     while simulation_app.is_running():
         pipeline._env.sim.render()
