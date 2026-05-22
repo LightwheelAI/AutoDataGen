@@ -21,7 +21,7 @@ class LLMDecomposerCfg(DecomposerCfg):
     base_url: str = "https://api.openai.com/v1"
     """The base URL for the LLM API."""
 
-    model: str = "gpt-3.5-turbo"
+    model: str = "gpt-5.4"
     """The model name for the LLM."""
 
     temperature: float = 0.3
