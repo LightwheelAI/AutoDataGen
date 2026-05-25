@@ -22,7 +22,7 @@ from curobo.wrap.reacher.motion_gen import (
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
-from pxr import UsdGeom
+from pxr import UsdGeom, UsdPhysics
 
 from autosim.core.logger import AutoSimLogger
 
@@ -344,6 +344,9 @@ class CuroboPlanner:
             if not obj_prim.IsValid():
                 self._logger.warning(f"Articulated object prim not found at {obj_path}")
                 continue
+            if not UsdPhysics.ArticulationRootAPI(obj_prim):
+                self._logger.warning(f"Prim at {obj_path} is not an articulated object, skipping")
+                continue
 
             link_poses = {}
             for child_prim in obj_prim.GetChildren():
@@ -430,7 +433,7 @@ class CuroboPlanner:
         articulated_link_poses = self._get_articulated_link_poses_from_usd()
 
         for obj_name, link_poses in articulated_link_poses.items():
-            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}"
+            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}/"
 
             # Collect all leaf primitives for this articulated object
             all_primitives = self._collect_primitives_by_prefix(obj_prim_prefix)
@@ -438,7 +441,7 @@ class CuroboPlanner:
             # Group primitives by link name
             link_children: dict[str, list[str]] = {}
             for prim_name in all_primitives:
-                relative_path = prim_name.split(f"{obj_prim_prefix}/")[1]
+                relative_path = prim_name.split(obj_prim_prefix)[1]
                 link_name = relative_path.split("/")[0]
                 if link_name not in link_children:
                     link_children[link_name] = []
@@ -495,7 +498,7 @@ class CuroboPlanner:
         updated_count = 0
 
         for obj_name, link_poses in articulated_link_poses.items():
-            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}"
+            obj_prim_prefix = f"{self._env_scene_prefix}/{obj_name}/"
 
             # Update each primitive using cached offset
             for primitive_name, (link_name, offset_pos, offset_quat) in self._articulated_primitive_offsets.items():
@@ -544,7 +547,7 @@ class CuroboPlanner:
         # Map each rigid object to its primitives
         mappings: dict[str, list[str]] = {}
         for object_name in rigid_objects.keys():
-            object_prefix = f"{self._env_scene_prefix}/{object_name}"
+            object_prefix = f"{self._env_scene_prefix}/{object_name}/"
             mappings[object_name] = [p for p in all_scene_primitives if p.startswith(object_prefix)]
 
         self._cached_object_mappings = mappings
