@@ -252,8 +252,8 @@ class AutoSimPipeline(ABC):
 
         robot_base_pose = as_torch(self._robot.data.body_link_pose_w)[
             self._env_id, self._robot_base_link_idx
-        ]  # [x, y, z, qw, qx, qy, qz]
-        w, x, y, z = robot_base_pose[3:7]
+        ]  # [x, y, z, qx, qy, qz, qw]
+        x, y, z, w = robot_base_pose[3:7]
         sin_yaw = 2 * (w * z + x * y)
         cos_yaw = 1 - 2 * (y**2 + z**2)
         yaw = torch.atan2(sin_yaw, cos_yaw)

@@ -14,7 +14,7 @@ The script expects this payload:
 {
   "object_reach_target_poses": {
     "<object_name>": [
-      [x, y, z, qw, qx, qy, qz],
+      [x, y, z, qx, qy, qz, qw],
       ...
     ],
     ...
@@ -23,7 +23,7 @@ The script expects this payload:
 
 Notes
 -----
-* Poses are in the object frame: [x, y, z, qw, qx, qy, qz].
+* Poses are in the object frame: [x, y, z, qx, qy, qz, qw].
 * `--live_poll_interval_s` controls how often the file is checked (default: 0.2s).
 """
 

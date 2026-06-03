@@ -56,7 +56,7 @@ class FrankaCubeLiftPipeline(AutoSimPipeline):
             ee_link_name="panda_hand",
             object_reach_target_poses={
                 "cube": [
-                    torch.tensor([0.0, 0.0, 0.10, 0.0, 1.0, 0.0, 0.0]),
+                    torch.tensor([0.0, 0.0, 0.10, 1.0, 0.0, 0.0, 0.0]),  # [x, y, z, qx, qy, qz, qw]: 绕 x 轴 180°
                 ],
             },
         )

@@ -88,7 +88,7 @@ class EnvExtraInfo:
     object_reach_target_poses: dict[str, list[torch.Tensor]] = field(default_factory=dict)
     """The reach target poses in the objects frame.
 
-    Each object maps to a list of candidate reach target poses ``[x, y, z, qw, qx, qy, qz]``.
+    Each object maps to a list of candidate reach target poses ``[x, y, z, qx, qy, qz, qw]``.
     When a reach skill is executed, the candidate closest to the robot end-effector's current
     pose in the object frame is selected.
     """
@@ -129,11 +129,11 @@ class WorldState:
     robot_joint_vel: torch.Tensor
     """The joint velocities of the robot."""
     robot_ee_pose: torch.Tensor
-    """The end - effector pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
+    """The end - effector pose of the robot in the world frame. [x, y, z, qx, qy, qz, qw]"""
     robot_base_pose: torch.Tensor
     """The base pose of the robot in the world frame. [x, y, yaw]"""
     robot_root_pose: torch.Tensor
-    """The root pose of the robot in the world frame. [x, y, z, qw, qx, qy, qz]"""
+    """The root pose of the robot in the world frame. [x, y, z, qx, qy, qz, qw]"""
     sim_joint_names: list[str]
     """The joint names of the robot."""
     objects: dict[str, torch.Tensor] = field(default_factory=dict)

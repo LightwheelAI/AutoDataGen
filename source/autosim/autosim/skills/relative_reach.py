@@ -13,6 +13,7 @@ from autosim.core.types import (
     SkillOutput,
     WorldState,
 )
+from autosim.utils.data_util import convert_quat
 
 from .base_skill import CuroboSkillExtraCfg
 from .reach import ReachSkill
@@ -111,7 +112,8 @@ class RelativeReachSkill(ReachSkill):
             raise ValueError("activate_qd should not be None when planning relative reach trajectories.")
 
         ee_pose = self._planner.get_ee_pose(activate_q)
-        target_pos, target_quat = ee_pose.position.clone(), ee_pose.quaternion.clone()
+        target_pos = ee_pose.position.clone()
+        target_quat = convert_quat(ee_pose.quaternion.clone(), to="xyzw")  # cuRobo wxyz → xyzw
         self._logger.info(f"ee pos in robot root frame: {target_pos}, ee quat in robot root frame: {target_quat}")
 
         # move the eef along the move axis by the move offset based on eef frame, and convert to robot root frame to get target pose
@@ -120,7 +122,7 @@ class RelativeReachSkill(ReachSkill):
             self.cfg.extra_cfg.get_direction_vector(goal.info["move_axis"]) * self.cfg.extra_cfg.move_offset
         )
         offset_pos_in_ee = move_offset_vector.to(isaaclab_device).unsqueeze(0)
-        offset_quat_in_ee = torch.tensor([1.0, 0.0, 0.0, 0.0], device=isaaclab_device).unsqueeze(0)
+        offset_quat_in_ee = torch.tensor([0.0, 0.0, 0.0, 1.0], device=isaaclab_device).unsqueeze(0)
         ee_pos_in_robot_root, ee_quat_in_robot_root = target_pos.to(isaaclab_device), target_quat.to(isaaclab_device)
 
         offset_pos_in_robot_root, offset_quat_in_robot_root = PoseUtils.combine_frame_transforms(

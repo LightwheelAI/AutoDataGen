@@ -10,7 +10,7 @@ class PoseSampler(ABC):
         Sample candidate poses around a base pose in object frame.
 
         Args:
-            base_pose_oe: Tensor shape [7] in object frame [x,y,z,qw,qx,qy,qz]
+            base_pose_oe: Tensor shape [7] in object frame [x,y,z,qx,qy,qz,qw]
 
         Returns:
             poses_oe: Tensor [K, 7] of sampled poses in object frame
@@ -55,7 +55,7 @@ class OffsetSampler(PoseSampler):
         base_quat = base_pose_oe[3:].view(1, 4).repeat(k, 1)
         half = dyaw * 0.5
         q_delta = torch.stack(
-            [torch.cos(half), torch.zeros_like(half), torch.zeros_like(half), torch.sin(half)], dim=-1
+            [torch.zeros_like(half), torch.zeros_like(half), torch.sin(half), torch.cos(half)], dim=-1
         )
         quat = self._quat_mul(base_quat, q_delta)
 
@@ -63,14 +63,14 @@ class OffsetSampler(PoseSampler):
 
     @staticmethod
     def _quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
-        w1, x1, y1, z1 = q1.unbind(-1)
-        w2, x2, y2, z2 = q2.unbind(-1)
+        x1, y1, z1, w1 = q1.unbind(-1)
+        x2, y2, z2, w2 = q2.unbind(-1)
         return torch.stack(
             [
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
                 w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
                 w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
                 w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
             ],
             dim=-1,
         )

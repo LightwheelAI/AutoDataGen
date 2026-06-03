@@ -335,9 +335,9 @@ def _collect_candidate_prim_paths(
 # -----------------------------------------------------------------------------
 
 
-def _matrix4d_from_pos_quat(pos: np.ndarray, quat_wxyz: np.ndarray) -> Gf.Matrix4d:
+def _matrix4d_from_pos_quat(pos: np.ndarray, quat_xyzw: np.ndarray) -> Gf.Matrix4d:
     rot = Gf.Rotation(
-        Gf.Quatd(float(quat_wxyz[0]), Gf.Vec3d(float(quat_wxyz[1]), float(quat_wxyz[2]), float(quat_wxyz[3])))
+        Gf.Quatd(float(quat_xyzw[3]), Gf.Vec3d(float(quat_xyzw[0]), float(quat_xyzw[1]), float(quat_xyzw[2])))
     )
     return Gf.Matrix4d().SetTransform(rot, Gf.Vec3d(float(pos[0]), float(pos[1]), float(pos[2])))
 
@@ -392,7 +392,7 @@ def _prim_world_matrix_from_body_frame(
     prim: Usd.Prim,
     body_prim: Usd.Prim,
     body_pos_w: np.ndarray,
-    body_quat_wxyz: np.ndarray,
+    body_quat_xyzw: np.ndarray,
     xform_cache: UsdGeom.XformCache,
 ) -> Gf.Matrix4d:
     """World transform: T_world_prim = T_world_body(scene) @ T_body_prim(usd_fixed)."""
@@ -402,7 +402,7 @@ def _prim_world_matrix_from_body_frame(
     # Rigid offset of collision prim in link/body frame; invariant to joint angle.
     prim_in_body = prim_usd * body_usd.GetInverse()
 
-    return _matrix4d_from_pos_quat(body_pos_w, body_quat_wxyz) * prim_in_body
+    return _matrix4d_from_pos_quat(body_pos_w, body_quat_xyzw) * prim_in_body
 
 
 def _link_name_under_prefix(path_str: str, prefix_norm: str) -> str:

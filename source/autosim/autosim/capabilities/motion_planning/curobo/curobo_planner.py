@@ -25,7 +25,7 @@ from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
 from pxr import UsdGeom, UsdPhysics
 
 from autosim.core.logger import AutoSimLogger
-from autosim.utils.data_util import as_torch
+from autosim.utils.data_util import as_torch, convert_quat
 
 if TYPE_CHECKING:
     from .curobo_planner_cfg import CuroboPlannerCfg
@@ -36,7 +36,7 @@ class CuroboPlanner:
 
     # Identity offset for primitives that should directly follow link pose
     _IDENTITY_OFFSET_POS = torch.zeros(3)
-    _IDENTITY_OFFSET_QUAT = torch.tensor([1.0, 0.0, 0.0, 0.0])  # w, x, y, z
+    _IDENTITY_OFFSET_QUAT = torch.tensor([0.0, 0.0, 0.0, 1.0])  # x, y, z, w (xyzw)
 
     def __init__(
         self,
@@ -358,7 +358,7 @@ class CuroboPlanner:
                 link_mat, _ = get_prim_world_pose(xform_cache, child_prim)
                 link_pose = Pose.from_matrix(torch.tensor(link_mat, dtype=torch.float32).unsqueeze(0))
                 link_pos_w = link_pose.position  # [1, 3]
-                link_quat_w = link_pose.quaternion  # [1, 4]
+                link_quat_w = convert_quat(link_pose.quaternion, to="xyzw")  # cuRobo wxyz → xyzw
 
                 link_pos_in_robot, link_quat_in_robot = subtract_frame_transforms(
                     robot_root_pos_w,
@@ -467,7 +467,8 @@ class CuroboPlanner:
                 for child_prim_name in child_prim_names:
                     child_obstacle = self.motion_gen.world_coll_checker.world_model.get_obstacle(child_prim_name)
                     child_pose = Pose.from_list(child_obstacle.pose, tensor_args=self.tensor_args)
-                    child_pos, child_quat = child_pose.position.squeeze(0), child_pose.quaternion.squeeze(0)
+                    child_pos = child_pose.position.squeeze(0)
+                    child_quat = convert_quat(child_pose.quaternion.squeeze(0), to="xyzw")  # cuRobo wxyz → xyzw
 
                     offset_pos, offset_quat = subtract_frame_transforms(
                         link_pos.unsqueeze(0), link_quat.unsqueeze(0), child_pos.unsqueeze(0), child_quat.unsqueeze(0)
@@ -520,7 +521,7 @@ class CuroboPlanner:
                     primitive_name,
                     Pose(
                         position=self._to_curobo_device(primitive_pos),
-                        quaternion=self._to_curobo_device(primitive_quat),
+                        quaternion=self._to_curobo_device(convert_quat(primitive_quat, to="wxyz")),  # xyzw → wxyz
                     ),
                     env_idx=self._env_id,
                     update_cpu_reference=True,
@@ -631,7 +632,9 @@ class CuroboPlanner:
             )
             obj_pose = Pose(
                 position=self._to_curobo_device(obj_pos_in_robot_root[self._env_id]),
-                quaternion=self._to_curobo_device(obj_quat_in_robot_root[self._env_id]),
+                quaternion=self._to_curobo_device(
+                    convert_quat(obj_quat_in_robot_root[self._env_id], to="wxyz")  # xyzw → wxyz
+                ),
             )
 
             # Determine if this object should be enabled
@@ -668,7 +671,7 @@ class CuroboPlanner:
 
         Args:
             target_pos: Target position [x, y, z]
-            target_quat: Target quaternion [qw, qx, qy, qz]
+            target_quat: Target quaternion [qx, qy, qz, qw]
             current_q: Current joint positions
             current_qd: Current joint velocities
             link_goals: Optional dictionary mapping link names to target poses for other links
@@ -701,7 +704,7 @@ class CuroboPlanner:
         # build the target pose
         goal = Pose(
             position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(target_quat),
+            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
         )
 
         # build the current state
@@ -720,7 +723,10 @@ class CuroboPlanner:
         if link_goals is not None:
             # Use provided link goals
             link_poses = {
-                link_name: Pose(position=self._to_curobo_device(pose[:3]), quaternion=self._to_curobo_device(pose[3:]))
+                link_name: Pose(
+                    position=self._to_curobo_device(pose[:3]),
+                    quaternion=self._to_curobo_device(convert_quat(pose[3:], to="wxyz")),  # xyzw → wxyz
+                )
                 for link_name, pose in link_goals.items()
             }
 
@@ -772,11 +778,11 @@ class CuroboPlanner:
 
         Args:
             target_pos: Tensor of shape [K, 3], in robot root frame.
-            target_quat: Tensor of shape [K, 4] in [qw, qx, qy, qz], in robot root frame.
+            target_quat: Tensor of shape [K, 4] in [qx, qy, qz, qw], in robot root frame.
             current_q: Tensor of shape [dof], current joint positions.
             current_qd: Tensor of shape [dof], current joint velocities. Defaults to zeros.
             link_goals: Optional dict mapping extra link names to tensors of shape [K, 7]
-                ([x, y, z, qw, qx, qy, qz], robot root frame) for multi-arm robots. Each entry
+                ([x, y, z, qx, qy, qz, qw], robot root frame) for multi-arm robots. Each entry
                 specifies the simultaneous target pose of that link for every sample in the batch.
 
         Returns:
@@ -818,7 +824,7 @@ class CuroboPlanner:
 
         goal = Pose(
             position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(target_quat),
+            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
         )
 
         start_state = JointState(
@@ -834,7 +840,7 @@ class CuroboPlanner:
             link_poses = {
                 ee_name: Pose(
                     position=self._to_curobo_device(poses[:, :3]),
-                    quaternion=self._to_curobo_device(poses[:, 3:]),
+                    quaternion=self._to_curobo_device(convert_quat(poses[:, 3:], to="wxyz")),  # xyzw → wxyz
                 )
                 for ee_name, poses in link_goals.items()
             }
@@ -857,9 +863,9 @@ class CuroboPlanner:
 
         Args:
             target_pos: Tensor of shape [K, 3], in robot root frame.
-            target_quat: Tensor of shape [K, 4] in [qw, qx, qy, qz], in robot root frame.
+            target_quat: Tensor of shape [K, 4] in [qx, qy, qz, qw], in robot root frame.
             link_goals: Optional dict mapping extra link names to tensors of shape [K, 7]
-                ([x, y, z, qw, qx, qy, qz], robot root frame) for multi-arm robots.
+                ([x, y, z, qx, qy, qz, qw], robot root frame) for multi-arm robots.
 
         Returns:
             IKResult from cuRobo. Check result.success[k], result.position_error[k],
@@ -881,14 +887,14 @@ class CuroboPlanner:
 
         goal = Pose(
             position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(target_quat),
+            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
         )
         link_poses = None
         if link_goals is not None:
             link_poses = {
                 ee_name: Pose(
                     position=self._to_curobo_device(poses[:, :3]),
-                    quaternion=self._to_curobo_device(poses[:, 3:]),
+                    quaternion=self._to_curobo_device(convert_quat(poses[:, 3:], to="wxyz")),  # xyzw → wxyz
                 )
                 for ee_name, poses in link_goals.items()
             }

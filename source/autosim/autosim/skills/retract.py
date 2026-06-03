@@ -12,6 +12,7 @@ from autosim.core.types import (
     SkillOutput,
     WorldState,
 )
+from autosim.utils.data_util import convert_quat
 
 from .base_skill import CuroboSkillBase, CuroboSkillExtraCfg
 
@@ -133,7 +134,9 @@ class RetractSkill(CuroboSkillBase):
             activate_q, _ = self._build_activate_joint_state(state.sim_joint_names, joint_pos, None)
             all_link_poses = self._planner.get_link_poses(activate_q, link_names=None)
             info["link_poses_in_robot_root_frame"] = {
-                name: torch.cat([pose.position.squeeze(0), pose.quaternion.squeeze(0)])
+                name: torch.cat(
+                    [pose.position.squeeze(0), convert_quat(pose.quaternion.squeeze(0), to="xyzw")]
+                )  # cuRobo wxyz → xyzw
                 for name, pose in all_link_poses.items()
             }
 

@@ -74,7 +74,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
 from autosim.core.registration import SkillRegistry
-from autosim.utils.data_util import as_torch
+from autosim.utils.data_util import as_torch, convert_quat
 from autosim.utils.debug_util import clear_debug_drawing, draw_line
 
 
@@ -119,7 +119,7 @@ def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
 
     root_pose = as_torch(robot.data.root_pose_w)[env_id].detach()
     robot_root_pos = root_pose[:3]
-    robot_root_quat = root_pose[3:]  # wxyz
+    robot_root_quat = root_pose[3:]  # xyzw (IsaacLab v3.0+)
 
     device, dtype = root_pose.device, root_pose.dtype
     xyz = spheres_root[:, :3].to(device=device, dtype=dtype)
@@ -128,7 +128,7 @@ def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
     n = xyz.shape[0]
     robot_root_pos_b = robot_root_pos.unsqueeze(0).expand(n, -1)
     robot_root_quat_b = robot_root_quat.unsqueeze(0).expand(n, -1)
-    identity = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=dtype).unsqueeze(0).expand(n, -1)
+    identity = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=dtype).unsqueeze(0).expand(n, -1)
 
     centers_w, _ = PoseUtils.combine_frame_transforms(robot_root_pos_b, robot_root_quat_b, xyz, identity)
 
@@ -139,7 +139,7 @@ def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
 
 
 def _get_ee_pose_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = None) -> torch.Tensor:
-    """Return EE pose in world frame as [x, y, z, qw, qx, qy, qz] via cuRobo FK."""
+    """Return EE pose in world frame as [x, y, z, qx, qy, qz, qw] via cuRobo FK."""
     import isaaclab.utils.math as PoseUtils
 
     planner = pipeline._motion_planner
@@ -153,14 +153,16 @@ def _get_ee_pose_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
 
     root_pose = as_torch(robot.data.root_pose_w)[env_id].detach()
     rr_pos = root_pose[:3].unsqueeze(0)
-    rr_quat = root_pose[3:].unsqueeze(0)  # wxyz
+    rr_quat = root_pose[3:].unsqueeze(0)  # xyzw
 
     device, dtype = root_pose.device, root_pose.dtype
     ee_pos_root = ee_pose_root.position.view(1, 3).to(device=device, dtype=dtype)
-    ee_quat_root = ee_pose_root.quaternion.view(1, 4).to(device=device, dtype=dtype)  # wxyz
+    ee_quat_root = convert_quat(ee_pose_root.quaternion.view(1, 4), to="xyzw").to(
+        device=device, dtype=dtype
+    )  # cuRobo wxyz → xyzw
 
     ee_pos_w, ee_quat_w = PoseUtils.combine_frame_transforms(rr_pos, rr_quat, ee_pos_root, ee_quat_root)
-    return torch.cat([ee_pos_w, ee_quat_w], dim=-1).squeeze(0)  # [7]
+    return torch.cat([ee_pos_w, ee_quat_w], dim=-1).squeeze(0)
 
 
 def _create_ee_marker(scale: float) -> VisualizationMarkers:
@@ -173,7 +175,7 @@ def _create_ee_marker(scale: float) -> VisualizationMarkers:
 
 def _update_ee_marker(vm: VisualizationMarkers, pose_w: torch.Tensor) -> None:
     pos = pose_w[:3].unsqueeze(0)  # [1, 3]
-    quat = pose_w[3:].unsqueeze(0)  # [1, 4] wxyz
+    quat = pose_w[3:].unsqueeze(0)  # [1, 4] xyzw
     vm.visualize(translations=pos, orientations=quat, marker_indices=[0])
 
 
@@ -305,7 +307,7 @@ def _print_link_pose_in_root_frame(
             idx = body_names.index(isaaclab_link_name)
             body_state = as_torch(robot.data.body_state_w)[env_id, idx].detach()
             root_pos_w = as_torch(robot.data.root_pos_w)[env_id].detach()
-            root_quat_w = as_torch(robot.data.root_quat_w)[env_id].detach()  # wxyz
+            root_quat_w = as_torch(robot.data.root_quat_w)[env_id].detach()  # xyzw
             pos_il, quat_il = PoseUtils.subtract_frame_transforms(
                 root_pos_w.unsqueeze(0),
                 root_quat_w.unsqueeze(0),
@@ -313,8 +315,8 @@ def _print_link_pose_in_root_frame(
                 body_state[3:7].unsqueeze(0),
             )
             pos_il = pos_il.squeeze(0).cpu()
-            quat_il = quat_il.squeeze(0).cpu()  # wxyz
-            print(f"[IsaacLab:{isaaclab_link_name}] (root frame)  pos={pos_il.tolist()}  quat(wxyz)={quat_il.tolist()}")
+            quat_il = quat_il.squeeze(0).cpu()  # xyzw
+            print(f"[IsaacLab:{isaaclab_link_name}] (root frame)  pos={pos_il.tolist()}  quat(xyzw)={quat_il.tolist()}")
 
 
 def _execute_single_skill_with_viz(

@@ -18,6 +18,7 @@ from autosim.core.types import (
     SkillOutput,
     WorldState,
 )
+from autosim.utils.data_util import as_torch, convert_quat
 
 from .base_skill import CuroboSkillExtraCfg
 from .reach import ReachSkill
@@ -48,12 +49,12 @@ def _parse_axis_vector(rotate_axis: str) -> torch.Tensor:
 
 
 def _axis_angle_to_quat(axis: torch.Tensor, angle: float) -> torch.Tensor:
-    """Convert axis-angle to quaternion [qw, qx, qy, qz]."""
+    """Convert axis-angle to quaternion [qx, qy, qz, qw] (xyzw)."""
 
     half = torch.as_tensor(angle / 2.0, device=axis.device, dtype=axis.dtype)
     s = torch.sin(half)
     w = torch.cos(half)
-    return torch.cat([w.unsqueeze(0), axis * s])
+    return torch.cat([axis * s, w.unsqueeze(0)])
 
 
 @configclass
@@ -108,11 +109,11 @@ class RotateSkill(ReachSkill):
         if self.cfg.extra_cfg.rotate_frame == "object":
             axis_local = _parse_axis_vector(self.cfg.extra_cfg.rotate_axis).to(env.device)
 
-            obj_pose_w = env.scene[skill_info.target_object].data.root_pose_w[0]  # [7]
-            obj_quat_w = obj_pose_w[3:].unsqueeze(0)  # [1, 4]
+            obj_pose_w = as_torch(env.scene[skill_info.target_object].data.root_pose_w)[0]  # [7] xyzw
+            obj_quat_w = obj_pose_w[3:].unsqueeze(0)  # [1, 4] xyzw
 
             robot = env.scene[env_extra_info.robot_name]
-            robot_quat_w = robot.data.root_pose_w[0, 3:].unsqueeze(0)  # [1, 4]
+            robot_quat_w = as_torch(robot.data.root_pose_w)[0, 3:].unsqueeze(0)  # [1, 4] xyzw
 
             # object frame -> world frame -> robot root frame
             axis_in_world = PoseUtils.quat_apply(obj_quat_w, axis_local.unsqueeze(0)).squeeze(0)
@@ -152,7 +153,7 @@ class RotateSkill(ReachSkill):
         for i in range(steps):
             ee_pose = self._planner.get_ee_pose(current_q)
             ee_pos = ee_pose.position.clone()
-            ee_quat = ee_pose.quaternion.clone()
+            ee_quat = convert_quat(ee_pose.quaternion.clone(), to="xyzw")  # cuRobo wxyz → xyzw
 
             if self.cfg.extra_cfg.rotate_frame == "ee":
                 axis_local = _parse_axis_vector(self.cfg.extra_cfg.rotate_axis).to(
@@ -170,13 +171,13 @@ class RotateSkill(ReachSkill):
             self._target_poses["target_pose"] = torch.cat([target_pos.unsqueeze(0), target_quat.unsqueeze(0)], dim=-1)
 
             self._logger.info(
-                f"Rotate step {i+1}/{steps} ({self.cfg.extra_cfg.rotate_frame} frame): "
+                f"Rotate step {i + 1}/{steps} ({self.cfg.extra_cfg.rotate_frame} frame): "
                 f"axis_in_root={axis_in_root}, step_angle={step_angle:.4f}"
             )
 
             traj = self._planner.plan_motion(target_pos, target_quat, current_q, current_qd)
             if traj is None:
-                self._logger.warning(f"Rotate planning failed at step {i+1}/{steps}")
+                self._logger.warning(f"Rotate planning failed at step {i + 1}/{steps}")
                 if not trajectories:
                     self._trajectory = None
                     return False
