@@ -7,6 +7,7 @@ from isaaclab.envs import ManagerBasedEnv
 
 from autosim import ActionAdapterBase
 from autosim.core.types import SkillOutput
+from autosim.utils.data_util import as_torch
 
 if TYPE_CHECKING:
     from .franka_adapter_cfg import FrankaAbsAdapterCfg
@@ -24,7 +25,7 @@ class FrankaAbsAdapter(ActionAdapterBase):
         target_joint_pos = skill_output.action  # [joint_positions with isaaclab joint order]
 
         robot = env.scene["robot"]
-        default_joint_pos = robot.data.default_joint_pos[0, :]
+        default_joint_pos = as_torch(robot.data.default_joint_pos)[0, :]
 
         last_action = env.action_manager.action
         action = last_action[0, :].clone()

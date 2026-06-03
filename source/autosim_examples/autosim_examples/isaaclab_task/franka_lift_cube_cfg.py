@@ -15,6 +15,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 
+from autosim.utils.data_util import as_torch
+
 from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG  # isort: skip
 
 
@@ -112,7 +114,7 @@ class ObservationsCfg:
 def cube_lifted(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("cube")) -> torch.Tensor:
     """Terminate when the cube is lifted."""
 
-    return env.scene[asset_cfg.name].data.root_pos_w[:, 2] > 0.10
+    return as_torch(env.scene[asset_cfg.name].data.root_pos_w)[:, 2] > 0.10
 
 
 @configclass

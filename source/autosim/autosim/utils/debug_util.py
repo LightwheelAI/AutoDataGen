@@ -8,6 +8,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils.math import combine_frame_transforms
 
 from autosim.core.types import OccupancyMap
+from autosim.utils.data_util import as_torch
 
 markers: dict[str, VisualizationMarkers] = {}
 
@@ -39,7 +40,7 @@ def _collect_world_poses(obj_poses: dict[str, list[torch.Tensor]], env: ManagerB
     """
     world_poses = []
     for obj_name, pose_list in obj_poses.items():
-        obj_pose_w = env.scene[obj_name].data.root_pose_w[0]  # [7]
+        obj_pose_w = as_torch(env.scene[obj_name].data.root_pose_w)[0]  # [7]
         obj_pos_w = obj_pose_w[:3].unsqueeze(0)  # [1, 3]
         obj_quat_w = obj_pose_w[3:].unsqueeze(0)  # [1, 4]
         for pose in pose_list:

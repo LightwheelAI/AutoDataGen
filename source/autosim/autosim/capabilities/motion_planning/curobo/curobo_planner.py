@@ -25,6 +25,7 @@ from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
 from pxr import UsdGeom, UsdPhysics
 
 from autosim.core.logger import AutoSimLogger
+from autosim.utils.data_util import as_torch
 
 if TYPE_CHECKING:
     from .curobo_planner_cfg import CuroboPlannerCfg
@@ -333,8 +334,8 @@ class CuroboPlanner:
         xform_cache = UsdGeom.XformCache()
         world_only_subffixes_paths = [f"{self._env_prim_path}/{sub}" for sub in self.cfg.world_only_subffixes or []]
 
-        robot_root_pos_w = self._robot.data.root_pos_w[self._env_id].unsqueeze(0)  # [1, 3]
-        robot_root_quat_w = self._robot.data.root_quat_w[self._env_id].unsqueeze(0)  # [1, 4]
+        robot_root_pos_w = as_torch(self._robot.data.root_pos_w)[self._env_id].unsqueeze(0)  # [1, 3]
+        robot_root_quat_w = as_torch(self._robot.data.root_quat_w)[self._env_id].unsqueeze(0)  # [1, 4]
 
         result = {}
 
@@ -391,8 +392,8 @@ class CuroboPlanner:
         articulations = self._env.scene.articulations
         world_only_subffixes_paths = [f"{self._env_prim_path}/{sub}" for sub in self.cfg.world_only_subffixes or []]
 
-        robot_root_pos_w = self._robot.data.root_pos_w
-        robot_root_quat_w = self._robot.data.root_quat_w
+        robot_root_pos_w = as_torch(self._robot.data.root_pos_w)
+        robot_root_quat_w = as_torch(self._robot.data.root_quat_w)
 
         result = {}
 
@@ -400,7 +401,7 @@ class CuroboPlanner:
             if f"{self._env_scene_prefix}/{obj_name}" not in world_only_subffixes_paths:
                 continue
 
-            body_pos_w, body_quat_w = articulation.data.body_pos_w, articulation.data.body_quat_w
+            body_pos_w, body_quat_w = as_torch(articulation.data.body_pos_w), as_torch(articulation.data.body_quat_w)
             body_count = body_pos_w.shape[1]
             body_pos_in_robot, body_quat_in_robot = subtract_frame_transforms(
                 robot_root_pos_w.repeat(1, body_count, 1),
@@ -599,7 +600,8 @@ class CuroboPlanner:
             return 0
 
         rigid_objects = self._env.scene.rigid_objects
-        robot_root_pos_in_world, robot_root_quat_in_world = self._robot.data.root_pos_w, self._robot.data.root_quat_w
+        robot_root_pos_in_world = as_torch(self._robot.data.root_pos_w)
+        robot_root_quat_in_world = as_torch(self._robot.data.root_quat_w)
 
         updated_count = 0
 
@@ -623,7 +625,7 @@ class CuroboPlanner:
         for object_name, world_obstacle_names in object_mappings.items():
             obj = rigid_objects[object_name]
             # NOTE: cuRobo world model is in the robot-root frame
-            obj_pos_in_world, obj_quat_in_world = obj.data.root_pos_w, obj.data.root_quat_w
+            obj_pos_in_world, obj_quat_in_world = as_torch(obj.data.root_pos_w), as_torch(obj.data.root_quat_w)
             obj_pos_in_robot_root, obj_quat_in_robot_root = subtract_frame_transforms(
                 robot_root_pos_in_world, robot_root_quat_in_world, obj_pos_in_world, obj_quat_in_world
             )

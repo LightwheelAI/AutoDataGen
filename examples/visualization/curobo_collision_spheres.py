@@ -74,6 +74,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
 from autosim.core.registration import SkillRegistry
+from autosim.utils.data_util import as_torch
 from autosim.utils.debug_util import clear_debug_drawing, draw_line
 
 
@@ -88,7 +89,7 @@ def _build_curobo_q(pipeline, env_id: int) -> torch.Tensor:
     robot = pipeline._robot
 
     isaaclab_names = list(robot.data.joint_names)
-    isaaclab_q = robot.data.joint_pos[env_id]
+    isaaclab_q = as_torch(robot.data.joint_pos)[env_id]
 
     q = torch.zeros(len(planner.target_joint_names), dtype=isaaclab_q.dtype, device=isaaclab_q.device)
     for i, name in enumerate(planner.target_joint_names):
@@ -116,7 +117,7 @@ def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
 
     spheres_root = kin_state.robot_spheres[0].detach()  # [N, 4]
 
-    root_pose = robot.data.root_pose_w[env_id].detach()
+    root_pose = as_torch(robot.data.root_pose_w)[env_id].detach()
     robot_root_pos = root_pose[:3]
     robot_root_quat = root_pose[3:]  # wxyz
 
@@ -150,7 +151,7 @@ def _get_ee_pose_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
         q_curobo = planner._to_curobo_device(q_curobo)
     ee_pose_root = planner.get_ee_pose(q_curobo)
 
-    root_pose = robot.data.root_pose_w[env_id].detach()
+    root_pose = as_torch(robot.data.root_pose_w)[env_id].detach()
     rr_pos = root_pose[:3].unsqueeze(0)
     rr_quat = root_pose[3:].unsqueeze(0)  # wxyz
 
@@ -302,9 +303,9 @@ def _print_link_pose_in_root_frame(
             print(f"[IsaacLab:{isaaclab_link_name}] link not found. Available: {body_names}")
         else:
             idx = body_names.index(isaaclab_link_name)
-            body_state = robot.data.body_state_w[env_id, idx].detach()
-            root_pos_w = robot.data.root_pos_w[env_id].detach()
-            root_quat_w = robot.data.root_quat_w[env_id].detach()  # wxyz
+            body_state = as_torch(robot.data.body_state_w)[env_id, idx].detach()
+            root_pos_w = as_torch(robot.data.root_pos_w)[env_id].detach()
+            root_quat_w = as_torch(robot.data.root_quat_w)[env_id].detach()  # wxyz
             pos_il, quat_il = PoseUtils.subtract_frame_transforms(
                 root_pos_w.unsqueeze(0),
                 root_quat_w.unsqueeze(0),

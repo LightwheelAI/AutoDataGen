@@ -15,6 +15,7 @@ from autosim.core.types import (
     SkillOutput,
     WorldState,
 )
+from autosim.utils.data_util import as_torch
 
 from .base_skill import CuroboSkillBase, CuroboSkillExtraCfg
 
@@ -235,7 +236,7 @@ class ReachSkill(CuroboSkillBase):
             SkillGoal with target poses in robot root frame.
         """
 
-        object_pose_in_env = env.scene[target_object].data.root_pose_w
+        object_pose_in_env = as_torch(env.scene[target_object].data.root_pose_w)
 
         object_pos_in_env = object_pose_in_env[:, :3]
         object_quat_in_env = object_pose_in_env[:, 3:]
@@ -250,8 +251,8 @@ class ReachSkill(CuroboSkillBase):
         self.visualize_debug_target_pose()
 
         robot = env.scene[env_extra_info.robot_name]
-        robot_root_pos_in_env = robot.data.root_pose_w[:, :3]
-        robot_root_quat_in_env = robot.data.root_pose_w[:, 3:]
+        robot_root_pos_in_env = as_torch(robot.data.root_pose_w)[:, :3]
+        robot_root_quat_in_env = as_torch(robot.data.root_pose_w)[:, 3:]
 
         reach_target_pos_in_root, reach_target_quat_in_root = PoseUtils.subtract_frame_transforms(
             robot_root_pos_in_env, robot_root_quat_in_env, reach_target_pos_in_env, reach_target_quat_in_env
@@ -262,7 +263,7 @@ class ReachSkill(CuroboSkillBase):
         )
 
         activate_q, _ = self._build_activate_joint_state(
-            robot.data.joint_names, robot.data.joint_pos[0], robot.data.joint_vel[0]
+            robot.data.joint_names, as_torch(robot.data.joint_pos)[0], as_torch(robot.data.joint_vel)[0]
         )
         extra_target_poses = self._build_extra_target_poses(activate_q, target_pose, env_extra_info)
 
@@ -302,8 +303,8 @@ class ReachSkill(CuroboSkillBase):
 
         robot = env.scene[env_extra_info.robot_name]
         ee_link_idx = robot.data.body_names.index(env_extra_info.ee_link_name)
-        ee_pose_w = robot.data.body_link_pose_w[0, ee_link_idx]  # [7]
-        obj_pose_w = env.scene[target_object].data.root_pose_w[0]  # [7]
+        ee_pose_w = as_torch(robot.data.body_link_pose_w)[0, ee_link_idx]  # [7]
+        obj_pose_w = as_torch(env.scene[target_object].data.root_pose_w)[0]  # [7]
 
         ee_pos_oe, ee_quat_oe = PoseUtils.subtract_frame_transforms(
             obj_pose_w[:3].unsqueeze(0),

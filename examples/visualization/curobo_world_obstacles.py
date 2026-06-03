@@ -40,6 +40,7 @@ import isaaclab.utils.math as PoseUtils
 
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
+from autosim.utils.data_util import as_torch
 from autosim.utils.debug_util import clear_debug_drawing, draw_line
 
 
@@ -215,7 +216,7 @@ def _visualize_world_obstacles(
     if world_model is None:
         raise RuntimeError("cuRobo collision checker has no world model loaded.")
 
-    robot_root_pose_w = pipeline._robot.data.root_pose_w[env_id].detach()
+    robot_root_pose_w = as_torch(pipeline._robot.data.root_pose_w)[env_id].detach()
     device = robot_root_pose_w.device
     dtype = robot_root_pose_w.dtype
 

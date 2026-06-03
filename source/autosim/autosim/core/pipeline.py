@@ -14,6 +14,7 @@ from autosim.skills import (
     CuroboSkillExtraCfg,
     NavigateSkillExtraCfg,
 )
+from autosim.utils.data_util import as_torch
 
 from .action_adapter import ActionAdapterBase, ActionAdapterCfg
 from .decomposer import Decomposer, DecomposerCfg
@@ -242,14 +243,14 @@ class AutoSimPipeline(ABC):
     def _build_world_state(self) -> WorldState:
         """Build the world state."""
 
-        joint_pos_limits = self._robot.data.joint_pos_limits[self._env_id, :, :]
+        joint_pos_limits = as_torch(self._robot.data.joint_pos_limits)[self._env_id, :, :]
         lower, upper = joint_pos_limits[:, 0], joint_pos_limits[:, 1]
-        robot_joint_pos = torch.clamp(self._robot.data.joint_pos[self._env_id, :], min=lower, max=upper)
+        robot_joint_pos = torch.clamp(as_torch(self._robot.data.joint_pos)[self._env_id, :], min=lower, max=upper)
 
-        robot_joint_vel = self._robot.data.joint_vel[self._env_id, :]
-        robot_ee_pose = self._robot.data.body_link_pose_w[self._env_id, self._eef_link_idx]
+        robot_joint_vel = as_torch(self._robot.data.joint_vel)[self._env_id, :]
+        robot_ee_pose = as_torch(self._robot.data.body_link_pose_w)[self._env_id, self._eef_link_idx]
 
-        robot_base_pose = self._robot.data.body_link_pose_w[
+        robot_base_pose = as_torch(self._robot.data.body_link_pose_w)[
             self._env_id, self._robot_base_link_idx
         ]  # [x, y, z, qw, qx, qy, qz]
         w, x, y, z = robot_base_pose[3:7]
@@ -258,7 +259,7 @@ class AutoSimPipeline(ABC):
         yaw = torch.atan2(sin_yaw, cos_yaw)
         robot_base_pose = torch.stack((robot_base_pose[0], robot_base_pose[1], yaw))  # [x, y, yaw]
 
-        robot_root_pose = self._robot.data.root_pose_w[self._env_id]
+        robot_root_pose = as_torch(self._robot.data.root_pose_w)[self._env_id]
 
         sim_joint_names = self._robot.data.joint_names
 
@@ -266,7 +267,7 @@ class AutoSimPipeline(ABC):
         for obj_name in self._env.scene.keys():
             obj = self._env.scene[obj_name]
             if hasattr(obj, "data") and hasattr(obj.data, "root_pose_w") and obj_name != self._robot_name:
-                objects_dict[obj_name] = obj.data.root_pose_w[self._env_id]
+                objects_dict[obj_name] = as_torch(obj.data.root_pose_w)[self._env_id]
 
         return WorldState(
             robot_joint_pos=robot_joint_pos,

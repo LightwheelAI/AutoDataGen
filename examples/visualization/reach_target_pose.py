@@ -68,6 +68,7 @@ from isaaclab.utils.math import (
 
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
+from autosim.utils.data_util import as_torch
 from autosim.utils.debug_util import visualize_reach_target_poses
 
 
@@ -110,7 +111,7 @@ def _apply_live_poses(*, poses_path: str, pipeline) -> None:
     for obj_name, pose_list in object_reach_target_poses.items():
         if obj_name not in env.scene.keys():
             continue
-        obj_pose_w = env.scene[obj_name].data.root_pose_w[0]  # [7]
+        obj_pose_w = as_torch(env.scene[obj_name].data.root_pose_w)[0]  # [7]
         device = obj_pose_w.device
         dtype = obj_pose_w.dtype
         env_extra_info.object_reach_target_poses[obj_name] = [
@@ -128,7 +129,7 @@ def _snapshot_object_poses_w(*, env, object_names: list[str]) -> dict[str, list[
         if obj_name not in env.scene.keys():
             print(f"[reach_target_pose] Skip missing scene object: {obj_name}")
             continue
-        pose_w = env.scene[obj_name].data.root_pose_w[0]
+        pose_w = as_torch(env.scene[obj_name].data.root_pose_w)[0]
         poses_w[obj_name] = [float(v) for v in pose_w.detach().cpu().tolist()]
     return poses_w
 

@@ -26,6 +26,7 @@ from scipy.ndimage import binary_dilation
 
 from autosim.core.logger import AutoSimLogger
 from autosim.core.types import MapBounds, OccupancyMap
+from autosim.utils.data_util import as_torch
 
 _logger = AutoSimLogger("OccupancyMap")
 
@@ -441,7 +442,7 @@ def _get_prim_world_matrix_for_scene_asset(
             return None
         link_idx = asset.body_names.index(link_name)
         body_pos, body_quat = _to_pose_numpy(
-            asset.data.body_pos_w[env_id, link_idx], asset.data.body_quat_w[env_id, link_idx]
+            as_torch(asset.data.body_pos_w)[env_id, link_idx], as_torch(asset.data.body_quat_w)[env_id, link_idx]
         )
         return _prim_world_matrix_from_body_frame(prim, body_prim, body_pos, body_quat, xform_cache)
 
@@ -450,7 +451,9 @@ def _get_prim_world_matrix_for_scene_asset(
         if not body_prim.IsValid():
             _logger.warning(f"USD root prim missing at '{prefix_norm}' for rigid object '{obj_name}'")
             return None
-        body_pos, body_quat = _to_pose_numpy(asset.data.root_pos_w[env_id], asset.data.root_quat_w[env_id])
+        body_pos, body_quat = _to_pose_numpy(
+            as_torch(asset.data.root_pos_w)[env_id], as_torch(asset.data.root_quat_w)[env_id]
+        )
         return _prim_world_matrix_from_body_frame(prim, body_prim, body_pos, body_quat, xform_cache)
 
     _logger.debug(f"Scene asset '{obj_name}' is not Articulation/RigidObject; skipping '{path_str}'")
