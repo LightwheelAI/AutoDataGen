@@ -13,6 +13,7 @@ from .relative_reach import (
     PushSkillCfg,
 )
 from .retract import RetractSkill, RetractSkillCfg
+from .rotate import RotateSkill, RotateSkillCfg
 
 
 @configclass
@@ -27,6 +28,7 @@ class AutoSimSkillsExtraCfg:
     push: PushSkillCfg = PushSkillCfg()
     reach: ReachSkillCfg = ReachSkillCfg()
     retract: RetractSkillCfg = RetractSkillCfg()
+    rotate: RotateSkillCfg = RotateSkillCfg()
 
     def get(cls, skill_name: str):
         """Get the skill configuration by name."""
@@ -40,3 +42,4 @@ class AutoSimSkillsExtraCfg:
         self.pull.extra_cfg.debug_target_pose = True
         self.push.extra_cfg.debug_target_pose = True
         self.reach.extra_cfg.debug_target_pose = True
+        self.rotate.extra_cfg.debug_target_pose = True
