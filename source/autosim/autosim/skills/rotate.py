@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 
 import isaaclab.utils.math as PoseUtils
@@ -33,9 +34,7 @@ def _parse_axis_vector(rotate_axis: str) -> torch.Tensor:
 
     matches = re.findall(r"([+-][xyz])", rotate_axis)
     if not matches:
-        raise ValueError(
-            f"Invalid rotate_axis format: '{rotate_axis}'. Expected e.g. '+x', '-z', '+x+y'."
-        )
+        raise ValueError(f"Invalid rotate_axis format: '{rotate_axis}'. Expected e.g. '+x', '-z', '+x+y'.")
 
     vec = torch.zeros(3)
     for match in matches:
@@ -64,7 +63,7 @@ class RotateSkillExtraCfg(CuroboSkillExtraCfg):
     rotate_axis: str = "+z"
     """Rotation axis expressed in rotate_frame. Same format as move_axis: '+x', '-y', '+x+z', etc."""
 
-    rotate_angle: float = 1.5708
+    rotate_angle: float = math.pi / 4
     """Rotation angle in radians (default ~90 degrees)."""
 
     rotate_frame: str = "ee"
@@ -78,9 +77,7 @@ class RotateSkillExtraCfg(CuroboSkillExtraCfg):
         super().__post_init__()
         supported_frames = {"ee", "object"}
         if self.rotate_frame not in supported_frames:
-            raise ValueError(
-                f"Unsupported rotate_frame: '{self.rotate_frame}'. Supported: {sorted(supported_frames)}"
-            )
+            raise ValueError(f"Unsupported rotate_frame: '{self.rotate_frame}'. Supported: {sorted(supported_frames)}")
         _parse_axis_vector(self.rotate_axis)  # validate axis string at config time
 
 
@@ -119,9 +116,9 @@ class RotateSkill(ReachSkill):
 
             # object frame -> world frame -> robot root frame
             axis_in_world = PoseUtils.quat_apply(obj_quat_w, axis_local.unsqueeze(0)).squeeze(0)
-            axis_in_root = PoseUtils.quat_apply(
-                PoseUtils.quat_inv(robot_quat_w), axis_in_world.unsqueeze(0)
-            ).squeeze(0)  # [3]
+            axis_in_root = PoseUtils.quat_apply(PoseUtils.quat_inv(robot_quat_w), axis_in_world.unsqueeze(0)).squeeze(
+                0
+            )  # [3]
             return SkillGoal(target_object=skill_info.target_object, info=dict(axis_in_root=axis_in_root))
 
         return SkillGoal(target_object=skill_info.target_object)
@@ -199,10 +196,19 @@ class RotateSkill(ReachSkill):
         else:
             # Concatenate all trajectory segments along the time axis
             import dataclasses
+
             combined_pos = torch.cat([t.position for t in trajectories], dim=0)
-            combined_vel = torch.cat([t.velocity for t in trajectories], dim=0) if trajectories[0].velocity is not None else None
-            combined_acc = torch.cat([t.acceleration for t in trajectories], dim=0) if trajectories[0].acceleration is not None else None
-            combined_jerk = torch.cat([t.jerk for t in trajectories], dim=0) if trajectories[0].jerk is not None else None
+            combined_vel = (
+                torch.cat([t.velocity for t in trajectories], dim=0) if trajectories[0].velocity is not None else None
+            )
+            combined_acc = (
+                torch.cat([t.acceleration for t in trajectories], dim=0)
+                if trajectories[0].acceleration is not None
+                else None
+            )
+            combined_jerk = (
+                torch.cat([t.jerk for t in trajectories], dim=0) if trajectories[0].jerk is not None else None
+            )
             self._trajectory = dataclasses.replace(
                 trajectories[0],
                 position=combined_pos,
