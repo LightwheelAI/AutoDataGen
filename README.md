@@ -95,7 +95,8 @@ Then launch the example with:
 cd autosim
 
 python examples/run_autosim_example.py \
-  --pipeline_id AutoSimPipeline-FrankaCubeLift-v0
+  --pipeline_id AutoSimPipeline-FrankaCubeLift-v0 \
+  --viz kit
 ```
 
 After launching, you will see in the Isaac Sim UI that the manipulator automatically executes the Cube Lift task.
@@ -155,7 +156,7 @@ Then you can launch it with:
 ```bash
 cd lw_benchhub
 
-python scripts/autosim/run_autosim_example.py --pipeline_id=LWBenchhub-Autosim-CoffeeSetupMugPipeline-v0
+python scripts/autosim/run_autosim_example.py --pipeline_id=LWBenchhub-Autosim-CoffeeSetupMugPipeline-v0 --viz kit
 ```
 
 We also support tasks such as CheesyBread, CloseOven, OpenFridge, and KettleBoiling. You can find the corresponding [implementations](https://github.com/LightwheelAI/LW-BenchHub/tree/main/lw_benchhub/autosim) in LW-BenchHub.
