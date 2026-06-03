@@ -22,7 +22,7 @@ Below is a typical setup workflow.
 > AutoDataGen uses `autosim` as a Python package to organize the code. `autosim` can be installed as a submodule within an environment that already includes Isaac Lab.
 
 ```bash
-conda create -n AutoDataGen python=3.11
+conda create -n AutoDataGen python=3.12
 
 conda activate AutoDataGen
 
@@ -35,19 +35,20 @@ git submodule update --init --recursive
 
 ### IsaacLab Installation
 
-`AutoDataGen` depends on Isaac Lab. You can follow the official installation guide [here](https://isaac-sim.github.io/IsaacLab/v2.2.1/source/setup/installation/pip_installation.html), or use the commands below. If you already have an environment with Isaac Lab installed, you can reuse it and skip this step.
+`AutoDataGen` depends on Isaac Lab. You can follow the official installation guide [here](https://isaac-sim.github.io/IsaacLab/v3.0.0-beta/source/setup/installation/pip_installation.html), or use the commands below. If you already have an environment with Isaac Lab installed, you can reuse it and skip this step.
 
 ```bash
+# Install uv
+pip install uv
+
 # Install CUDA toolkit
 conda install -c "nvidia/label/cuda-12.8.1" cuda-toolkit
 
 # Install PyTorch
-pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+uv pip install -U torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
 
 # Install IsaacSim
-pip install --upgrade pip
-pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
-
+uv pip install "isaacsim[all,extscache]==6.0.0" --extra-index-url https://pypi.nvidia.com
 
 # Install IsaacLab
 sudo apt install cmake build-essential
@@ -65,7 +66,7 @@ Some skills in `autosim` depend on cuRobo. You can follow the official [document
 ```bash
 cd dependencies/curobo
 
-pip install -e . --no-build-isolation
+uv pip install -e . --no-build-isolation
 ```
 
 ### autosim Installation
@@ -73,7 +74,7 @@ pip install -e . --no-build-isolation
 Finally, install `autosim` into your environment:
 
 ```bash
-pip install -e source/autosim
+uv pip install -e source/autosim
 ```
 
 ## Quick Start
@@ -85,7 +86,7 @@ After completing the installation and configuration steps above, you can directl
 First, install the `autosim_examples` package:
 
 ```bash
-pip install -e source/autosim_examples
+uv pip install -e source/autosim_examples
 ```
 
 Then launch the example with:
