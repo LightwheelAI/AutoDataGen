@@ -63,7 +63,7 @@ class RotateSkillExtraCfg(CuroboSkillExtraCfg):
     rotate_axis: str = "+z"
     """Rotation axis expressed in rotate_frame. Same format as move_axis: '+x', '-y', '+x+z', etc."""
 
-    rotate_angle: float = math.pi / 4
+    rotate_angle: float = math.pi / 2
     """Rotation angle in radians (default ~90 degrees)."""
 
     rotate_frame: str = "ee"
