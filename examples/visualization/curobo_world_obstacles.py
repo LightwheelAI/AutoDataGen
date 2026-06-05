@@ -40,7 +40,7 @@ import isaaclab.utils.math as PoseUtils
 
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
-from autosim.utils.data_util import as_torch
+from autosim.utils.data_util import as_torch, convert_quat
 from autosim.utils.debug_util import clear_debug_drawing, draw_line
 
 
@@ -129,11 +129,11 @@ def _draw_oriented_box(*, pose_w: _Pose7, half_dims_xyz: torch.Tensor, color, th
 def _compose_robot_to_world(*, robot_root_pose_w: torch.Tensor, pose_r: _Pose7) -> _Pose7:
     """Compose pose in robot root frame to world frame."""
     rr_pos_w = robot_root_pose_w[:3].view(1, 3)
-    rr_quat_w = robot_root_pose_w[3:].view(1, 4)
+    rr_quat_w = robot_root_pose_w[3:].view(1, 4)  # xyzw (IsaacLab v3.0)
     pos_r = pose_r.pos.view(1, 3)
-    quat_r = pose_r.quat.view(1, 4)
+    quat_r = convert_quat(pose_r.quat.view(1, 4), to="xyzw")  # cuRobo wxyz → xyzw
     pos_w, quat_w = PoseUtils.combine_frame_transforms(rr_pos_w, rr_quat_w, pos_r, quat_r)
-    return _Pose7(pos=pos_w.view(3), quat=quat_w.view(4))
+    return _Pose7(pos=pos_w.view(3), quat=convert_quat(quat_w.view(4), to="wxyz"))  # xyzw → wxyz
 
 
 def _is_obstacle_enabled(collision_checker, obstacle_name: str, env_idx: int = 0) -> bool:
