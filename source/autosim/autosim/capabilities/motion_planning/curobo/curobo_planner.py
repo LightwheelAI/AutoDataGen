@@ -55,7 +55,9 @@ class CuroboPlanner:
 
         # Cache frequently used paths
         self._env_prim_path = f"/World/envs/env_{self._env_id}"
-        self._env_scene_prefix = f"{self._env_prim_path}/Scene"
+        self._env_scene_prefix = (
+            f"{self._env_prim_path}/{self.cfg.env_scene_prefix}" if self.cfg.env_scene_prefix else self._env_prim_path
+        )
 
         # Initialize logger
         log_level = logging.DEBUG if self.cfg.debug_planner else logging.INFO

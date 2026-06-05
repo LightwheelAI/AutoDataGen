@@ -77,3 +77,6 @@ class CuroboPlannerCfg:
     """Enable detailed motion planning debug information."""
     cuda_device: int | None = 0
     """Preferred CUDA device index; None uses torch.cuda.current_device() (respects CUDA_VISIBLE_DEVICES)."""
+
+    env_scene_prefix: str | None = "Scene"
+    """Prefix of the environment scene."""
