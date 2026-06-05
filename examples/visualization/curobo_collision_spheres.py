@@ -1,7 +1,7 @@
 """Visualize cuRobo robot self-collision spheres during pipeline execution.
 
 This script runs an AutoSim pipeline and updates collision sphere + EE frame
-visualization after every simulation step.
+visualization after every simulation step using debug draw lines (no USD prims created).
 
 Usage
 -----
@@ -18,17 +18,17 @@ To debug reach planning without executing the planned action trajectory:
 Defaults
 --------
 * Environment ID: 0
-* Sphere color: green (0.2, 0.9, 0.2)
-* Sphere opacity: 0.4
+* Sphere color: green (0.2, 0.9, 0.2, 0.8)
 * EE frame scale: 0.1
 
 Notes
 -----
 * Pipeline execution logic is inlined so visualization can hook into every step.
 * Spheres with radius <= 0 are disabled placeholders and are skipped.
-* VisualizationMarkers groups spheres by radius (one USD prototype per unique radius).
+* Each sphere is drawn as a 3-axis cross (X/Y/Z lines) scaled by sphere radius.
+* EE frame is drawn as three RGB axis lines (R=X, G=Y, B=Z).
 * ``--hold_on_reach_plan`` intercepts only reach skills after planning succeeds:
-  it draws the full planned end-effector path, updates markers for inspection,
+  it draws the full planned end-effector path, updates debug lines for inspection,
   renders the UI for ``--reach_plan_hold_seconds``, then continues normal execution.
 """
 
@@ -67,9 +67,6 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(vars(args_cli))
 simulation_app = app_launcher.app
 
-import isaaclab.sim as sim_utils
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from isaaclab.markers.config import FRAME_MARKER_CFG
 
 import autosim_examples  # noqa: F401
 from autosim import make_pipeline
@@ -165,51 +162,72 @@ def _get_ee_pose_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
     return torch.cat([ee_pos_w, ee_quat_w], dim=-1).squeeze(0)
 
 
-def _create_ee_marker(scale: float) -> VisualizationMarkers:
-    """Create a frame-axis marker for the EE pose."""
-    cfg = FRAME_MARKER_CFG.copy()
-    cfg.markers["frame"].scale = (scale, scale, scale)
-    cfg = cfg.replace(prim_path="/World/debug/ee_frame")
-    return VisualizationMarkers(cfg)
+def _draw_ee_frame(pose_w: torch.Tensor, scale: float = 0.1) -> None:
+    """Draw EE frame axes using debug lines (R=X, G=Y, B=Z)."""
+    import isaaclab.utils.math as PoseUtils
+
+    pos = pose_w[:3]
+    quat = pose_w[3:]  # xyzw
+    rot = PoseUtils.matrix_from_quat(quat.unsqueeze(0)).squeeze(0)  # (3, 3)
+
+    origin = tuple(pos.cpu().tolist())
+    for axis_idx, color in enumerate([(1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]):
+        axis_dir = rot[:, axis_idx] * scale
+        tip = tuple((pos + axis_dir).cpu().tolist())
+        draw_line(origin, tip, color=color, size=3.0)
 
 
-def _update_ee_marker(vm: VisualizationMarkers, pose_w: torch.Tensor) -> None:
-    pos = pose_w[:3].unsqueeze(0)  # [1, 3]
-    quat = pose_w[3:].unsqueeze(0)  # [1, 4] xyzw
-    vm.visualize(translations=pos, orientations=quat, marker_indices=[0])
+_CIRCLE_PTS = 16  # segments per great-circle arc
+_CIRCLE_ANGLES = np.linspace(0, 2 * np.pi, _CIRCLE_PTS + 1)
+_COS = np.cos(_CIRCLE_ANGLES).astype(np.float32)
+_SIN = np.sin(_CIRCLE_ANGLES).astype(np.float32)
 
 
-def _create_markers(unique_radii: np.ndarray, color: list[float], alpha: float) -> VisualizationMarkers:
-    """Build a VisualizationMarkers with one sphere prototype per unique radius."""
-    markers_cfg: dict[str, sim_utils.SphereCfg] = {}
-    for i, r in enumerate(unique_radii):
-        markers_cfg[f"sphere_{i}"] = sim_utils.SphereCfg(
-            radius=float(r),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=tuple(color),
-                opacity=alpha,
-            ),
+def _draw_sphere_wireframe(cx: float, cy: float, cz: float, r: float, color: tuple, size: float = 2.0) -> None:
+    """Draw a sphere as three orthogonal great circles (XY, YZ, XZ planes)."""
+    # XY plane
+    for j in range(_CIRCLE_PTS):
+        draw_line(
+            (cx + r * _COS[j], cy + r * _SIN[j], cz),
+            (cx + r * _COS[j + 1], cy + r * _SIN[j + 1], cz),
+            color=color,
+            size=size,
         )
-    cfg = VisualizationMarkersCfg(prim_path="/World/debug/collision_spheres", markers=markers_cfg)
-    return VisualizationMarkers(cfg)
+    # YZ plane
+    for j in range(_CIRCLE_PTS):
+        draw_line(
+            (cx, cy + r * _COS[j], cz + r * _SIN[j]),
+            (cx, cy + r * _COS[j + 1], cz + r * _SIN[j + 1]),
+            color=color,
+            size=size,
+        )
+    # XZ plane
+    for j in range(_CIRCLE_PTS):
+        draw_line(
+            (cx + r * _COS[j], cy, cz + r * _SIN[j]),
+            (cx + r * _COS[j + 1], cy, cz + r * _SIN[j + 1]),
+            color=color,
+            size=size,
+        )
 
 
-def _update_markers(
-    vm: VisualizationMarkers,
-    positions: np.ndarray,
-    radii: np.ndarray,
-    unique_radii: np.ndarray,
-) -> None:
-    radius_to_idx = {float(r): i for i, r in enumerate(unique_radii)}
-    marker_indices = np.array([radius_to_idx[float(r)] for r in radii], dtype=np.int32)
-    translations = torch.from_numpy(positions).float()
-    vm.visualize(translations=translations, marker_indices=marker_indices.tolist())
+def _draw_spheres(positions: np.ndarray, radii: np.ndarray, color: tuple = (0.2, 0.9, 0.2, 0.8)) -> None:
+    """Draw collision spheres as three orthogonal wireframe circles."""
+    for i in range(len(positions)):
+        _draw_sphere_wireframe(
+            float(positions[i, 0]),
+            float(positions[i, 1]),
+            float(positions[i, 2]),
+            float(radii[i]),
+            color,
+        )
 
 
-def _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii):
+def _update_visualization(pipeline, env_id, color: tuple = (0.2, 0.9, 0.2, 0.8), ee_scale: float = 0.1):
+    clear_debug_drawing()
     positions, radii = _get_spheres_world(pipeline, env_id)
-    _update_markers(vm_spheres, positions, radii, unique_radii)
-    _update_ee_marker(vm_ee, _get_ee_pose_world(pipeline, env_id))
+    _draw_spheres(positions, radii, color=color)
+    _draw_ee_frame(_get_ee_pose_world(pipeline, env_id), scale=ee_scale)
 
 
 def _draw_trajectory_path(pipeline, env_id: int, trajectory, stride: int = 1) -> list[torch.Tensor]:
@@ -245,7 +263,7 @@ def _draw_trajectory_path(pipeline, env_id: int, trajectory, stride: int = 1) ->
     return poses_w
 
 
-def _visualize_planned_reach(pipeline, env_id, trajectory, vm_spheres, vm_ee, unique_radii, duration_s: float):
+def _visualize_planned_reach(pipeline, env_id, trajectory, duration_s: float):
     """Draw a reach plan, render briefly, then return to normal execution.
 
     This is a pre-execution debugging path: after the full reach plan is available,
@@ -256,8 +274,8 @@ def _visualize_planned_reach(pipeline, env_id, trajectory, vm_spheres, vm_ee, un
     _draw_trajectory_path(pipeline, env_id, trajectory)
     if len(trajectory.position) > 0:
         positions, radii = _get_spheres_world(pipeline, env_id, trajectory.position[0])
-        _update_markers(vm_spheres, positions, radii, unique_radii)
-        _update_ee_marker(vm_ee, _get_ee_pose_world(pipeline, env_id, trajectory.position[-1]))
+        _draw_spheres(positions, radii)
+        _draw_ee_frame(_get_ee_pose_world(pipeline, env_id, trajectory.position[-1]))
     print(
         f"Planned reach trajectory with {len(trajectory.position)} waypoints. "
         f"Rendering for {duration_s:.1f}s before execution."
@@ -319,14 +337,12 @@ def _print_link_pose_in_root_frame(
             print(f"[IsaacLab:{isaaclab_link_name}] (root frame)  pos={pos_il.tolist()}  quat(xyzw)={quat_il.tolist()}")
 
 
-def _execute_single_skill_with_viz(
-    pipeline, skill, goal, vm_spheres, vm_ee, unique_radii, env_id, curobo_link_name=None, isaaclab_link_name=None
-):
+def _execute_single_skill_with_viz(pipeline, skill, goal, env_id, curobo_link_name=None, isaaclab_link_name=None):
     """Execute one skill with visualization hooks.
 
-    Normal mode matches AutoSimPipeline's step loop and updates markers after each
-    simulation step. With ``--hold_on_reach_plan``, reach skills pause briefly after
-    successful planning so the planned trajectory can be inspected before execution.
+    Normal mode updates debug-line sphere + EE visualization after each simulation step.
+    With ``--hold_on_reach_plan``, reach skills pause briefly after successful planning
+    so the planned trajectory can be inspected before execution.
     """
     world_state = pipeline._build_world_state()
     plan_success = skill.plan(world_state, goal)
@@ -341,9 +357,6 @@ def _execute_single_skill_with_viz(
             pipeline,
             env_id,
             skill._trajectory,
-            vm_spheres,
-            vm_ee,
-            unique_radii,
             args_cli.reach_plan_hold_seconds,
         )
 
@@ -361,7 +374,7 @@ def _execute_single_skill_with_viz(
         pipeline._generated_actions.append(action)
 
         pipeline._env.sim.render()
-        _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii)
+        _update_visualization(pipeline, env_id)
         if curobo_link_name is not None or isaaclab_link_name is not None:
             _print_link_pose_in_root_frame(pipeline, env_id, curobo_link_name, isaaclab_link_name)
 
@@ -387,19 +400,9 @@ def _execute_single_skill_with_viz(
 
 def main():
     env_id = 0
-    color = [0.2, 0.9, 0.2]
-    alpha = 0.4
-    ee_scale = 0.1
 
     pipeline = make_pipeline(args_cli.pipeline_id)
     pipeline.initialize()
-
-    # Build markers using the initial robot pose (before reset). The unique radius set
-    # defines the USD sphere prototypes reused for all later marker updates.
-    positions, radii = _get_spheres_world(pipeline, env_id)
-    unique_radii = np.unique(radii)
-    vm_spheres = _create_markers(unique_radii, color, alpha)
-    vm_ee = _create_ee_marker(scale=ee_scale)
 
     # Decompose the task before reset, matching the normal AutoSimPipeline.run() order.
     decompose_result = pipeline.decompose()
@@ -407,7 +410,7 @@ def main():
     # After reset, execute the decomposed skills with this script's visualization hooks.
     pipeline._check_skill_extra_cfg()
     pipeline.reset_env()
-    _update_visualization(pipeline, env_id, vm_spheres, vm_ee, unique_radii)
+    _update_visualization(pipeline, env_id)
 
     try:
         for subtask in decompose_result.subtasks:
@@ -425,9 +428,6 @@ def main():
                     pipeline,
                     skill,
                     goal,
-                    vm_spheres,
-                    vm_ee,
-                    unique_radii,
                     env_id,
                     curobo_link_name=args_cli.curobo_link_name,
                     isaaclab_link_name=args_cli.isaaclab_link_name,

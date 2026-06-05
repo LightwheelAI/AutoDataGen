@@ -231,7 +231,7 @@ class NavigateSkill(Skill):
 
         # If we are not in the final approach, try to face the object
         if not is_final_approach:
-            obj_tensor = state.objects[self._target_object_name]  # [x, y, z, qw, qx, qy, qz]
+            obj_tensor = state.objects[self._target_object_name]  # [x, y, z, qx, qy, qz, qw]
             obj_pos = obj_tensor[:2]  # [x, y] in world frame
 
             dx_obj = obj_pos[0] - current_pose[0]
