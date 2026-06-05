@@ -26,6 +26,7 @@ class FrankaCubeLiftPipelineCfg(AutoSimPipelineCfg):
         self.motion_planner.robot_config_file = "franka.yml"
         self.motion_planner.world_ignore_subffixes = []
         self.motion_planner.world_only_subffixes = []
+        self.motion_planner.env_scene_prefix = None
 
 
 class FrankaCubeLiftPipeline(AutoSimPipeline):
