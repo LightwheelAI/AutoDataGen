@@ -244,6 +244,18 @@ class DecomposeResult:
     skill_sequence: list[str]
     """The sequence of skills in the task."""
 
+    def get_target_objects(self) -> list[str]:
+        """Return deduplicated target object names across all skills, excluding 'none'/empty."""
+        seen = set()
+        result = []
+        for subtask in self.subtasks:
+            for skill in subtask.skills:
+                name = skill.target_object
+                if name and name.lower() != "none" and name not in seen:
+                    seen.add(name)
+                    result.append(name)
+        return result
+
 
 """NAVIGATION RELATED TYPES"""
 

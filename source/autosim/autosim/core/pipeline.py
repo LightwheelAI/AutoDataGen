@@ -104,6 +104,9 @@ class AutoSimPipeline(ABC):
         # set the initialized flag
         self._initialized = True
 
+        # target objects to be manipulated
+        self._target_objects: list[str] = None
+
     def run(self) -> PipelineOutput:
         """Run the AutoSim pipeline."""
 
@@ -148,6 +151,7 @@ class AutoSimPipeline(ABC):
         else:
             decompose_result: DecomposeResult = self._decomposer.decompose(self._env_extra_info)
             self._decomposer.write_cache(self._env_extra_info.task_name, decompose_result)
+        self._decompose_result = decompose_result
         return decompose_result
 
     def execute_skill_sequence(self, decompose_result: DecomposeResult):
@@ -264,7 +268,9 @@ class AutoSimPipeline(ABC):
         sim_joint_names = self._robot.data.joint_names
 
         objects_dict = dict()
-        for obj_name in self._env.scene.keys():
+        if self._target_objects is None:
+            self._target_objects = self._decompose_result.get_target_objects()
+        for obj_name in self._target_objects:
             obj = self._env.scene[obj_name]
             if hasattr(obj, "data") and hasattr(obj.data, "root_pose_w") and obj_name != self._robot_name:
                 objects_dict[obj_name] = as_torch(obj.data.root_pose_w)[self._env_id]
