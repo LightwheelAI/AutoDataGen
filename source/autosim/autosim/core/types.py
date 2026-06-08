@@ -233,7 +233,7 @@ class DecomposeResult:
     """The objects of the task."""
     fixtures: list[FixtureInfo]
     """The fixtures of the task."""
-    interactive_elements: list[str]
+    interactive_elements: list[str] | list[dict]
     """The interactive elements of the task."""
     subtasks: list[SubtaskResult]
     """The subtasks of the task."""
