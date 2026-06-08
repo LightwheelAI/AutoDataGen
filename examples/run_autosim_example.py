@@ -9,6 +9,7 @@ parser = argparse.ArgumentParser(description="run autosim example pipeline.")
 parser.add_argument(
     "--pipeline_id", type=str, default="AutoSimPipeline-FrankaCubeLift-v0", help="Name of the autosim pipeline."
 )
+parser.add_argument("--num_runs", type=int, default=10, help="Number of times to run the pipeline.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -28,7 +29,10 @@ from autosim import make_pipeline
 
 def main():
     pipeline = make_pipeline(args_cli.pipeline_id)
-    pipeline.run()
+
+    for i in range(args_cli.num_runs):
+        print(f"====== run {i + 1} times =======")
+        pipeline.run()
 
 
 if __name__ == "__main__":
