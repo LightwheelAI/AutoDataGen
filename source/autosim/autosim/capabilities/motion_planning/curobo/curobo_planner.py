@@ -581,7 +581,20 @@ class CuroboPlanner:
         - Articulated object link poses (if articulated offsets are cached)
 
         Called automatically before each planning operation.
+
+        NOTE: collision geometry is derived from articulation.data (direct PhysX buffer reads),
+        not from the viewport rendering. When use_fabric=False, the rendered visual state may
+        be slightly inconsistent with the true physics state due to USD Stage sync uncertainty,
+        while articulation.data always reflects the correct current state. It is recommended to
+        use use_fabric=True to keep the visual output consistent with the collision geometry used here.
         """
+
+        use_fabric = self._env.cfg.sim.use_fabric
+        if not use_fabric:
+            self._logger.warning(
+                f"use_fabric in your isaaclab env: {use_fabric}. curobo articulated collision may be inaccurate, it's"
+                " recommended to use use_fabric=True"
+            )
 
         if self.cfg.enable_dynamic_world_sync:
             self._sync_dynamic_objects()
