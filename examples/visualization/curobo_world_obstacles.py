@@ -322,6 +322,8 @@ def main():
     pipeline.initialize()
     pipeline.reset_env()
 
+    for _ in range(10):  # warm up
+        pipeline._env.step(pipeline._env.action_manager.action)
     _visualize_world_obstacles(pipeline=pipeline)
 
     while simulation_app.is_running():
