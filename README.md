@@ -61,12 +61,12 @@ cd dependencies/IsaacLab
 
 ### cuRobo Installation
 
-Some skills in `autosim` depend on cuRobo. You can follow the official [documentation](https://curobo.org/get_started/1_install_instructions.html), or use the commands below:
+Some skills in `autosim` depend on cuRobo. You can follow the official [documentation](https://nvlabs.github.io/curobo/latest/getting-started/installation.html), or use the commands below:
 
 ```bash
 cd dependencies/curobo
 
-uv pip install -e . --no-build-isolation
+uv pip install -e ".[cu12]"
 ```
 
 ### autosim Installation
