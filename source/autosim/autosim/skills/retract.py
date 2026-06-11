@@ -40,8 +40,8 @@ class RetractSkill(CuroboSkillBase):
     """Skill to move the robot arm to a predefined retract configuration.
 
     The retract configuration is read from the robot's cuRobo yaml file
-    (cspace.retract_config). This is useful for resetting the arm to a safe
-    pose between tasks or after a grasp.
+    (cspace.default_joint_position). This is useful for resetting the arm to
+    a safe pose between tasks or after a grasp.
     """
 
     def __init__(self, extra_cfg: RetractSkillExtraCfg) -> None:
@@ -63,7 +63,7 @@ class RetractSkill(CuroboSkillBase):
 
         retract_q = self._get_retract_config(state)
         if retract_q is None:
-            self._logger.warning("retract_config not found in robot yaml, cannot plan")
+            self._logger.warning("default_joint_position not found in robot yaml, cannot plan")
             return False
 
         full_sim_joint_names = state.sim_joint_names
@@ -91,13 +91,16 @@ class RetractSkill(CuroboSkillBase):
         return self._trajectory is not None
 
     def _get_retract_config(self, state: WorldState) -> torch.Tensor | None:
-        """Extract retract_config from the loaded robot yaml and reorder to planner joint order."""
+        """Extract retract config from the loaded robot yaml and reorder to planner joint order.
+
+        In cuRobo v2 the field is renamed from `cspace.retract_config` to `cspace.default_joint_position`.
+        """
 
         robot_cfg = self._planner.robot_cfg
         try:
             cspace = robot_cfg["robot_cfg"]["kinematics"]["cspace"]
             yaml_joint_names = cspace["joint_names"]
-            yaml_retract = cspace["retract_config"]
+            yaml_retract = cspace["default_joint_position"]
         except (KeyError, TypeError):
             return None
 
