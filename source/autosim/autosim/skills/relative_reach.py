@@ -129,7 +129,7 @@ class RelativeReachSkill(ReachSkill):
             ee_pos_in_robot_root, ee_quat_in_robot_root, offset_pos_in_ee, offset_quat_in_ee
         )
 
-        planner_device = self._planner.tensor_args.device
+        planner_device = self._planner.device_cfg.device
         target_pos = offset_pos_in_robot_root.to(planner_device).squeeze(0)
         target_quat = offset_quat_in_robot_root.to(planner_device).squeeze(0)
         self._logger.info(

@@ -1,24 +1,17 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
-from curobo.cuda_robot_model.util import load_robot_yaml
-from curobo.geom.types import WorldConfig
-from curobo.rollout.cost.pose_cost import PoseCostMetric
-from curobo.types.base import TensorDeviceType
-from curobo.types.file_path import ContentPath
-from curobo.types.math import Pose
-from curobo.types.state import JointState
-from curobo.util.logger import setup_curobo_logger
-from curobo.util.usd_helper import UsdHelper, get_prim_world_pose
-from curobo.util_file import get_assets_path, get_configs_path
-from curobo.wrap.reacher.motion_gen import (
-    MotionGen,
-    MotionGenConfig,
-    MotionGenPlanConfig,
-)
+from curobo._src.types.tool_pose import GoalToolPose
+from curobo._src.util.config_io import join_path, resolve_config
+from curobo._src.util.usd_scene_parser import UsdSceneParser
+from curobo._src.util.usd_util import get_prim_world_pose
+from curobo.content import get_robot_configs_path
+from curobo.logging import setup_logger
+from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
+from curobo.types import DeviceCfg, JointState, Pose, ToolPoseCriteria
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
@@ -62,55 +55,42 @@ class CuroboPlanner:
         # Initialize logger
         log_level = logging.DEBUG if self.cfg.debug_planner else logging.INFO
         self._logger = AutoSimLogger("CuroboPlanner", log_level)
-        setup_curobo_logger("warn")
+        setup_logger("info")
 
         # Configuration operations
         self._refine_config_from_env(env)
 
         # Load robot configuration
-        self.robot_cfg: dict[str, Any] = self._load_robot_config()
+        self.robot_cfg: dict = self._load_robot_config()
 
         # Create motion generator
-        world_cfg = WorldConfig()
-        motion_gen_config = MotionGenConfig.load_from_robot_config(
-            self.robot_cfg,
-            world_cfg,
-            self.tensor_args,
-            interpolation_dt=self.cfg.interpolation_dt,
-            collision_checker_type=self.cfg.collision_checker_type,
+        motion_planner_cfg = MotionPlannerCfg.create(
+            robot=self.robot_cfg,
             collision_cache=self.cfg.collision_cache,
-            collision_activation_distance=self.cfg.collision_activation_distance,
-            num_trajopt_seeds=self.cfg.num_trajopt_seeds,
-            num_graph_seeds=self.cfg.num_graph_seeds,
-            use_cuda_graph=self.cfg.use_cuda_graph,
             self_collision_check=self.cfg.self_collision_check,
-            self_collision_opt=self.cfg.self_collision_opt,
-            fixed_iters_trajopt=True,
-            maximum_trajectory_dt=0.5,
-            ik_opt_iters=500,
+            device_cfg=self.device_cfg,
+            num_ik_seeds=self.cfg.num_graph_seeds,
+            num_trajopt_seeds=self.cfg.num_trajopt_seeds,
+            use_cuda_graph=self.cfg.use_cuda_graph,
+            optimizer_collision_activation_distance=self.cfg.collision_activation_distance,
+            max_batch_size=1,
         )
-        self.motion_gen: MotionGen = MotionGen(motion_gen_config)
+        motion_planner_cfg.trajopt_solver_config.interpolation_dt = self.cfg.interpolation_dt
+        self.motion_gen: MotionPlanner = MotionPlanner(motion_planner_cfg)
 
-        self.target_joint_names = self.motion_gen.kinematics.joint_names
+        self.target_joint_names = self.motion_gen.joint_names
 
-        # Create plan configuration with parameters from configuration
-        self.plan_config: MotionGenPlanConfig = MotionGenPlanConfig(
-            enable_graph=self.cfg.enable_graph,
-            enable_graph_attempt=self.cfg.enable_graph_attempt,
-            max_attempts=self.cfg.max_planning_attempts,
-            time_dilation_factor=self.cfg.time_dilation_factor,
-        )
+        # Save per-call plan parameters (v2 has no shared plan config object)
+        self._plan_max_attempts = self.cfg.max_planning_attempts
+        self._plan_enable_graph_attempt = self.cfg.enable_graph_attempt if self.cfg.enable_graph else 0
 
-        # Create USD helper
-        self.usd_helper = UsdHelper()
+        # Create USD scene parser
+        self.usd_helper = UsdSceneParser()
         self.usd_helper.load_stage(env.scene.stage)
 
         # Warm up planner
         self._logger.info("Warming up motion planner...")
-        self.motion_gen.warmup(enable_graph=self.cfg.use_cuda_graph, warmup_js_trajopt=False)
-
-        # Define supported cuRobo primitive types for object discovery and pose synchronization
-        self.primitive_types: list[str] = ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]
+        self.motion_gen.warmup(enable_graph=self.cfg.use_cuda_graph, num_warmup_iterations=10)
 
         # Cache for dynamic world synchronization.
         self._cached_object_mappings: dict[str, str] | None = None
@@ -131,43 +111,43 @@ class CuroboPlanner:
         # This isolates the motion planner from Isaac Lab's device configuration
         if torch.cuda.is_available():
             idx = self.cfg.cuda_device if self.cfg.cuda_device is not None else torch.cuda.current_device()
-            self.tensor_args = TensorDeviceType(device=torch.device(f"cuda:{idx}"), dtype=torch.float32)
+            self.device_cfg = DeviceCfg(device=torch.device(f"cuda:{idx}"), dtype=torch.float32)
             self._logger.debug(f"cuRobo motion planner initialized on CUDA device {idx}")
         else:
-            self.tensor_args = TensorDeviceType()
+            self.device_cfg = DeviceCfg()
             self._logger.warning("CUDA not available, cuRobo using CPU - this may cause device compatibility issues")
 
         # refine interpolation dt
         self.cfg.interpolation_dt = env.cfg.sim.dt * env.cfg.decimation
 
-    def _load_robot_config(self):
-        """Load robot configuration from file or dictionary."""
+    def _load_robot_config(self) -> dict:
+        """Load robot configuration as a dict, injecting asset path when provided.
 
-        if isinstance(self.cfg.robot_config_file, str):
-            self._logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
+        Returns a dict so MotionPlannerCfg.create() can receive external_asset_path
+        without depending on cuRobo's default content paths.
+        """
 
-            curobo_config_path = self.cfg.curobo_config_path or f"{get_configs_path()}/robot"
-            curobo_asset_path = self.cfg.curobo_asset_path or get_assets_path()
-
-            content_path = ContentPath(
-                robot_config_root_path=curobo_config_path,
-                robot_urdf_root_path=curobo_asset_path,
-                robot_asset_root_path=curobo_asset_path,
-                robot_config_file=self.cfg.robot_config_file,
-            )
-            robot_cfg = load_robot_yaml(content_path)
-            robot_cfg["robot_cfg"]["kinematics"]["external_asset_path"] = curobo_asset_path
-
-            return robot_cfg
-        else:
+        if isinstance(self.cfg.robot_config_file, dict):
             self._logger.info("Using custom robot configuration dictionary.")
-
             return self.cfg.robot_config_file
+
+        # Load YAML: if robot_config_file is an absolute path it resolves directly;
+        # if relative, join with curobo_config_path (or curobo default).
+        config_root = self.cfg.curobo_config_path or get_robot_configs_path()
+        robot_dict = resolve_config(join_path(config_root, self.cfg.robot_config_file))
+        self._logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
+
+        if self.cfg.curobo_asset_path is not None:
+            # Inject asset path so KinematicsLoaderCfg picks up the right URDF/mesh root.
+            # external_asset_path is deprecated in v2 but still functional.
+            robot_dict["kinematics"]["external_asset_path"] = self.cfg.curobo_asset_path
+
+        return robot_dict
 
     def _to_curobo_device(self, tensor: torch.Tensor) -> torch.Tensor:
         """Convert tensor to cuRobo device for isolated device management."""
 
-        return tensor.to(device=self.tensor_args.device, dtype=self.tensor_args.dtype)
+        return tensor.to(device=self.device_cfg.device, dtype=self.device_cfg.dtype)
 
     def _initialize_static_world(self) -> None:
         """Initialize static world geometry from USD stage.
@@ -193,35 +173,32 @@ class CuroboPlanner:
         ]
         ignore_list.append(robot_prim_path)
 
-        world_cfg = self.usd_helper.get_obstacles_from_stage(
+        scene_cfg = self.usd_helper.get_obstacles_from_stage(
             only_paths=only_paths,
             reference_prim_path=robot_prim_path,
             ignore_substring=ignore_list,
         )
 
         # Remove primitives that don't match collision_enable_substrings before loading into cuRobo
-        self._filter_world_config(world_cfg)
-
-        # Compensate for ancestor prim scale that cuRobo's USD reader misses on non-mesh primitives
-        self._apply_ancestor_scale_to_world_config(world_cfg)
+        self._filter_scene_config(scene_cfg)
 
         # Load filtered world geometry into cuRobo collision checker
-        self._static_world_config = world_cfg.get_collision_check_world()
-        self.motion_gen.update_world(self._static_world_config)
+        self._static_scene_cfg = scene_cfg.get_collision_check_world()
+        self.motion_gen.update_world(self._static_scene_cfg)
         self._invalidate_object_mapping_cache()
 
         # Build offset cache for articulated primitives (relative to their parent link)
         # This cache is used later to sync articulated object poses before each planning call
         self._build_articulated_primitive_offsets()
 
-    def _filter_world_config(self, world_cfg) -> None:
-        """Remove primitives from WorldConfig that don't match collision_enable_substrings.
+    def _filter_scene_config(self, scene_cfg) -> None:
+        """Remove primitives from SceneCfg that don't match collision_enable_substrings.
 
-        Modifies world_cfg in-place before it is loaded into cuRobo, so filtered
+        Modifies scene_cfg in-place before it is loaded into cuRobo, so filtered
         primitives never enter the collision checker (saves memory and computation).
 
         Args:
-            world_cfg: WorldConfig object from cuRobo's UsdHelper.get_obstacles_from_stage()
+            scene_cfg: SceneCfg object from cuRobo's UsdHelper.get_obstacles_from_stage()
 
         Note:
             If collision_enable_substrings is None, all primitives are kept (no filtering).
@@ -231,73 +208,12 @@ class CuroboPlanner:
         if substrings is None:
             return
 
-        for attr in ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]:
-            primitive_list = getattr(world_cfg, attr, None)
+        for attr in ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel"]:
+            primitive_list = getattr(scene_cfg, attr, None)
             if not primitive_list:
                 continue
             filtered = [p for p in primitive_list if any(sub in p.name for sub in substrings)]
-            setattr(world_cfg, attr, filtered)
-
-    def _apply_ancestor_scale_to_world_config(self, world_cfg) -> None:
-        """Apply ancestor prim scale to non-mesh primitives in WorldConfig.
-
-        cuRobo's USD reader handles scale differently per primitive type:
-        - Mesh: correctly applies full world scale (t_scale) to vertices — no fix needed
-        - Cuboid: uses prim's own xformOp:scale as dims — missing ancestor scale
-        - Sphere: uses prim's own xformOp:scale for radius — missing ancestor scale
-        - Cylinder/Capsule: ignores ALL scale (own + ancestor) — missing full world scale
-
-        This method reads the full world scale from USD and compensates for what cuRobo missed.
-        Modifies world_cfg in-place.
-        """
-
-        stage = self.usd_helper.stage
-        xform_cache = UsdGeom.XformCache()
-
-        for cuboid in world_cfg.cuboid or []:
-            prim = stage.GetPrimAtPath(cuboid.name)
-            if not prim.IsValid():
-                continue
-            _, t_scale = get_prim_world_pose(xform_cache, prim)
-            # cuRobo already applied own_scale as dims, so we only need ancestor contribution
-            own_scale = prim.GetAttribute("xformOp:scale").Get()
-            if own_scale is None:
-                continue
-            own_scale = list(own_scale)
-            ancestor_scale = [t / o if o != 0 else 1.0 for t, o in zip(t_scale, own_scale)]
-            if all(abs(s - 1.0) < 1e-6 for s in ancestor_scale):
-                continue
-            cuboid.dims = [d * s for d, s in zip(cuboid.dims, ancestor_scale)]
-
-        for sphere in world_cfg.sphere or []:
-            prim = stage.GetPrimAtPath(sphere.name)
-            if not prim.IsValid():
-                continue
-            _, t_scale = get_prim_world_pose(xform_cache, prim)
-            # cuRobo applied max(own_scale) to radius, so divide it out
-            own_scale = prim.GetAttribute("xformOp:scale").Get()
-            own_max = max(list(own_scale)) if own_scale is not None else 1.0
-            ancestor_factor = max(t_scale) / own_max if own_max != 0 else 1.0
-            if abs(ancestor_factor - 1.0) < 1e-6:
-                continue
-            sphere.radius *= ancestor_factor
-
-        for prim_obj in list(world_cfg.cylinder or []) + list(world_cfg.capsule or []):
-            prim = stage.GetPrimAtPath(prim_obj.name)
-            if not prim.IsValid():
-                continue
-            _, t_scale = get_prim_world_pose(xform_cache, prim)
-            if all(abs(s - 1.0) < 1e-6 for s in t_scale):
-                continue
-            # cuRobo applied NO scale at all for cylinder/capsule, so full t_scale is the correction
-            scale_z = t_scale[2]
-            scale_xy = max(t_scale[0], t_scale[1])
-            prim_obj.radius *= scale_xy
-            if hasattr(prim_obj, "height"):  # cylinder
-                prim_obj.height *= scale_z
-            if hasattr(prim_obj, "base"):  # capsule
-                prim_obj.base = [v * scale_z for v in prim_obj.base]
-                prim_obj.tip = [v * scale_z for v in prim_obj.tip]
+            setattr(scene_cfg, attr, filtered)
 
     def _collect_primitives_by_prefix(self, prefix: str) -> list[str]:
         """Collect all primitive names from cuRobo world model that start with given prefix.
@@ -308,16 +224,8 @@ class CuroboPlanner:
         Returns:
             List of primitive names matching the prefix.
         """
-        world_model = self.motion_gen.world_coll_checker.world_model
-        primitives = []
-        for primitive_type in self.primitive_types:
-            primitive_list = getattr(world_model, primitive_type, None)
-            if not primitive_list:
-                continue
-            for primitive in primitive_list:
-                if primitive.name.startswith(prefix):
-                    primitives.append(primitive.name)
-        return primitives
+        all_names = self.motion_gen.scene_collision_checker.get_obstacle_names(env_idx=self._env_id)
+        return [n for n in all_names if n.startswith(prefix)]
 
     def _get_articulated_link_poses_from_usd(
         self,
@@ -467,8 +375,8 @@ class CuroboPlanner:
                 link_pos, link_quat = link_poses[link_name]
 
                 for child_prim_name in child_prim_names:
-                    child_obstacle = self.motion_gen.world_coll_checker.world_model.get_obstacle(child_prim_name)
-                    child_pose = Pose.from_list(child_obstacle.pose, tensor_args=self.tensor_args)
+                    child_obstacle = self._static_scene_cfg.get_obstacle(child_prim_name)
+                    child_pose = Pose.from_list(child_obstacle.pose, device_cfg=self.device_cfg)
                     child_pos = child_pose.position.squeeze(0)
                     child_quat = convert_quat(child_pose.quaternion.squeeze(0), to="xyzw")  # cuRobo wxyz → xyzw
 
@@ -519,14 +427,13 @@ class CuroboPlanner:
                 primitive_pos = link_pos + quat_apply(link_quat, offset_pos)
                 primitive_quat = quat_mul(link_quat, offset_quat)
 
-                self.motion_gen.world_coll_checker.update_obstacle_pose(
+                self.motion_gen.scene_collision_checker.update_obstacle_pose(
                     primitive_name,
                     Pose(
                         position=self._to_curobo_device(primitive_pos),
                         quaternion=self._to_curobo_device(convert_quat(primitive_quat, to="wxyz")),  # xyzw → wxyz
                     ),
                     env_idx=self._env_id,
-                    update_cpu_reference=True,
                 )
                 updated_count += 1
 
@@ -657,14 +564,13 @@ class CuroboPlanner:
 
             for world_obstacle_name in world_obstacle_names:
                 # Update pose
-                self.motion_gen.world_coll_checker.update_obstacle_pose(
+                self.motion_gen.scene_collision_checker.update_obstacle_pose(
                     world_obstacle_name,
                     obj_pose,
                     env_idx=self._env_id,
-                    update_cpu_reference=True,
                 )
                 # Enable or disable obstacle
-                self.motion_gen.world_coll_checker.enable_obstacle(
+                self.motion_gen.scene_collision_checker.enable_obstacle(
                     world_obstacle_name,
                     enable=should_enable,
                     env_idx=self._env_id,
@@ -716,12 +622,6 @@ class CuroboPlanner:
             self._to_curobo_device(current_q), joint_limits.position[0], joint_limits.position[1]
         ).to(current_q.device)
 
-        # build the target pose
-        goal = Pose(
-            position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
-        )
-
         # build the current state
         state = JointState(
             position=self._to_curobo_device(current_q),
@@ -731,189 +631,57 @@ class CuroboPlanner:
             joint_names=self.target_joint_names,
         )
 
-        current_joint_state: JointState = state.get_ordered_joint_state(self.target_joint_names)
+        current_joint_state: JointState = state.reorder(self.target_joint_names)
 
-        # Prepare link_poses for multi-arm robots
-        link_poses = None
+        # Build GoalToolPose for v2 API
+        ee_link = self.motion_gen.tool_frames[0]
+        pose_dict = {
+            ee_link: Pose(
+                position=self._to_curobo_device(target_pos),
+                quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
+            )
+        }
         if link_goals is not None:
-            # Use provided link goals
-            link_poses = {
-                link_name: Pose(
-                    position=self._to_curobo_device(pose[:3]),
-                    quaternion=self._to_curobo_device(convert_quat(pose[3:], to="wxyz")),  # xyzw → wxyz
+            for link_name, pose7 in link_goals.items():
+                pose_dict[link_name] = Pose(
+                    position=self._to_curobo_device(pose7[:3]),
+                    quaternion=self._to_curobo_device(convert_quat(pose7[3:], to="wxyz")),  # xyzw → wxyz
                 )
-                for link_name, pose in link_goals.items()
-            }
+        goal = GoalToolPose.from_poses(pose_dict, ordered_tool_frames=list(pose_dict.keys()))
 
-        # Build per-call plan config: clone only when we need to attach a pose_cost_metric
-        # so the shared self.plan_config is never mutated.
+        # Set partial pose weight criteria before planning, reset afterwards if not used
         if self.cfg.reach_partial_pose_weight is not None:
             weights = torch.tensor(
                 self.cfg.reach_partial_pose_weight,
-                device=self.tensor_args.device,
-                dtype=self.tensor_args.dtype,
+                device=self.device_cfg.device,
+                dtype=self.device_cfg.dtype,
             )
-            pose_metric = PoseCostMetric(reach_partial_pose=True, reach_vec_weight=weights)
-            active_plan_config = self.plan_config.clone()
-            active_plan_config.pose_cost_metric = pose_metric
+            criteria = ToolPoseCriteria(
+                terminal_pose_axes_weight_factor=weights,
+                non_terminal_pose_axes_weight_factor=weights,
+            )
+            self.motion_gen.update_tool_pose_criteria({ee_link: criteria})
             self._logger.debug(f"reach_partial_pose_weight applied: {self.cfg.reach_partial_pose_weight}")
         else:
-            active_plan_config = self.plan_config
+            self.motion_gen.update_tool_pose_criteria({ee_link: ToolPoseCriteria()})
 
         # execute planning
-        result = self.motion_gen.plan_single(
-            current_joint_state.unsqueeze(0),
+        result = self.motion_gen.plan_pose(
             goal,
-            active_plan_config,
-            link_poses=link_poses,
+            current_joint_state.unsqueeze(0),
+            max_attempts=self._plan_max_attempts,
+            enable_graph_attempt=self._plan_enable_graph_attempt,
         )
 
-        if result.success.item():
-            current_plan = result.get_interpolated_plan()
-            motion_plan = current_plan.get_ordered_joint_state(self.target_joint_names)
-
-            self._logger.debug(f"planning succeeded with {len(motion_plan.position)} waypoints")
-            return motion_plan
-        else:
-            self._logger.warning(f"planning failed: {result.status}")
+        if result is None or not result.success.any():
+            self._logger.warning("planning failed")
             return None
+        current_plan: JointState = result.get_interpolated_plan()
+        motion_plan = current_plan.reorder(self.target_joint_names)
 
-    def plan_motion_batch(
-        self,
-        target_pos: torch.Tensor,
-        target_quat: torch.Tensor,
-        current_q: torch.Tensor,
-        current_qd: torch.Tensor | None = None,
-        link_goals: dict[str, torch.Tensor] | None = None,
-    ):
-        """
-        Plan trajectories for a batch of target poses from the same start joint state.
-
-        This uses cuRobo's batch API (`MotionGen.plan_batch`) under the hood.
-
-        Args:
-            target_pos: Tensor of shape [K, 3], in robot root frame.
-            target_quat: Tensor of shape [K, 4] in [qx, qy, qz, qw], in robot root frame.
-            current_q: Tensor of shape [dof], current joint positions.
-            current_qd: Tensor of shape [dof], current joint velocities. Defaults to zeros.
-            link_goals: Optional dict mapping extra link names to tensors of shape [K, 7]
-                ([x, y, z, qx, qy, qz, qw], robot root frame) for multi-arm robots. Each entry
-                specifies the simultaneous target pose of that link for every sample in the batch.
-
-        Returns:
-            MotionGenResult (cuRobo). Check `result.success[k]` for each batch index.
-
-        Note:
-            `time_dilation_factor` is always suppressed for batch planning because cuRobo's
-            `retime_trajectory` does not support batch results.
-        """
-
-        # Refine collision world before planning
-        self._refine_curobo_world_collision()
-
-        if target_pos.ndim != 2 or target_pos.shape[-1] != 3:
-            raise ValueError(f"target_pos must have shape [K, 3], got {tuple(target_pos.shape)}")
-        if target_quat.ndim != 2 or target_quat.shape[-1] != 4:
-            raise ValueError(f"target_quat must have shape [K, 4], got {tuple(target_quat.shape)}")
-        if target_pos.shape[0] != target_quat.shape[0]:
-            raise ValueError(
-                f"Batch size mismatch: target_pos has {target_pos.shape[0]}, target_quat has {target_quat.shape[0]}"
-            )
-        k = target_pos.shape[0]
-        if link_goals is not None:
-            for ee_name, poses in link_goals.items():
-                if poses.ndim != 2 or poses.shape != (k, 7):
-                    raise ValueError(f"link_goals['{ee_name}'] must have shape [{k}, 7], got {tuple(poses.shape)}")
-
-        if current_qd is None:
-            current_qd = torch.zeros_like(current_q)
-
-        dof_needed = len(self.target_joint_names)
-        if len(current_q) < dof_needed:
-            pad = torch.zeros(dof_needed - len(current_q), dtype=current_q.dtype, device=current_q.device)
-            current_q = torch.concatenate([current_q, pad], axis=0)
-            current_qd = torch.concatenate([current_qd, torch.zeros_like(pad)], axis=0)
-        elif len(current_q) > dof_needed:
-            current_q = current_q[:dof_needed]
-            current_qd = current_qd[:dof_needed]
-
-        goal = Pose(
-            position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
-        )
-
-        start_state = JointState(
-            position=self._to_curobo_device(current_q).view(1, -1),
-            velocity=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
-            acceleration=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
-            jerk=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
-            joint_names=self.target_joint_names,
-        ).repeat_seeds(int(target_pos.shape[0]))
-
-        link_poses = None
-        if link_goals is not None:
-            link_poses = {
-                ee_name: Pose(
-                    position=self._to_curobo_device(poses[:, :3]),
-                    quaternion=self._to_curobo_device(convert_quat(poses[:, 3:], to="wxyz")),  # xyzw → wxyz
-                )
-                for ee_name, poses in link_goals.items()
-            }
-        # plan_batch does not support retime_trajectory (batch result); disable time_dilation_factor
-        batch_plan_config = self.plan_config.clone()
-        batch_plan_config.time_dilation_factor = None
-        return self.motion_gen.plan_batch(start_state, goal, batch_plan_config, link_poses=link_poses)
-
-    def solve_ik_batch(
-        self,
-        target_pos: torch.Tensor,
-        target_quat: torch.Tensor,
-        link_goals: dict[str, torch.Tensor] | None = None,
-    ):
-        """
-        Solve IK for a batch of target poses without trajectory optimization.
-
-        Faster than plan_motion_batch for reachability checking since it skips
-        trajectory optimization entirely.
-
-        Args:
-            target_pos: Tensor of shape [K, 3], in robot root frame.
-            target_quat: Tensor of shape [K, 4] in [qx, qy, qz, qw], in robot root frame.
-            link_goals: Optional dict mapping extra link names to tensors of shape [K, 7]
-                ([x, y, z, qx, qy, qz, qw], robot root frame) for multi-arm robots.
-
-        Returns:
-            IKResult from cuRobo. Check result.success[k], result.position_error[k],
-            result.rotation_error[k] for each batch index.
-        """
-
-        # Refine collision world before planning
-        self._refine_curobo_world_collision()
-
-        if target_pos.ndim != 2 or target_pos.shape[-1] != 3:
-            raise ValueError(f"target_pos must have shape [K, 3], got {tuple(target_pos.shape)}")
-        if target_quat.ndim != 2 or target_quat.shape[-1] != 4:
-            raise ValueError(f"target_quat must have shape [K, 4], got {tuple(target_quat.shape)}")
-        k = target_pos.shape[0]
-        if link_goals is not None:
-            for ee_name, poses in link_goals.items():
-                if poses.ndim != 2 or poses.shape != (k, 7):
-                    raise ValueError(f"link_goals['{ee_name}'] must have shape [{k}, 7], got {tuple(poses.shape)}")
-
-        goal = Pose(
-            position=self._to_curobo_device(target_pos),
-            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
-        )
-        link_poses = None
-        if link_goals is not None:
-            link_poses = {
-                ee_name: Pose(
-                    position=self._to_curobo_device(poses[:, :3]),
-                    quaternion=self._to_curobo_device(convert_quat(poses[:, 3:], to="wxyz")),  # xyzw → wxyz
-                )
-                for ee_name, poses in link_goals.items()
-            }
-        return self.motion_gen.ik_solver.solve_batch(goal, link_poses=link_poses)
+        self._logger.debug(f"planning succeeded with {len(motion_plan.position)} waypoints")
+        motion_plan = motion_plan.squeeze(0).squeeze(0)  # [1, 1, n_waypoints, dof] -> [n_waypoints, dof]
+        return motion_plan
 
     def plan_to_joint_config(
         self,
@@ -924,7 +692,7 @@ class CuroboPlanner:
         """Plan a joint-space trajectory to a target joint configuration.
 
         Unlike plan_motion which targets a Cartesian pose, this plans directly
-        in joint space using cuRobo's plan_single_js. Used by RetractSkill to
+        in joint space using cuRobo's plan_cspace. Used by RetractSkill to
         move the robot to a predefined retract configuration.
 
         Args:
@@ -976,33 +744,36 @@ class CuroboPlanner:
             joint_names=self.target_joint_names,
         )
 
-        start_state = start_state.get_ordered_joint_state(self.target_joint_names)
-        goal_state = goal_state.get_ordered_joint_state(self.target_joint_names)
+        start_state = start_state.reorder(self.target_joint_names)
+        goal_state = goal_state.reorder(self.target_joint_names)
 
-        result = self.motion_gen.plan_single_js(
-            start_state.unsqueeze(0),
+        result = self.motion_gen.plan_cspace(
             goal_state.unsqueeze(0),
-            self.plan_config.clone(),
+            start_state.unsqueeze(0),
+            max_attempts=self._plan_max_attempts,
+            enable_graph_attempt=self._plan_enable_graph_attempt,
         )
 
-        if result.success.item():
-            current_plan = result.get_interpolated_plan()
-            motion_plan = current_plan.get_ordered_joint_state(self.target_joint_names)
-            self._logger.debug(f"joint-space planning succeeded with {len(motion_plan.position)} waypoints")
-            return motion_plan
-        else:
-            self._logger.warning(f"joint-space planning failed: {result.status}")
+        if result is None or not result.success.any():
+            self._logger.warning("joint-space planning failed")
             return None
+        current_plan: JointState = result.get_interpolated_plan()
+        motion_plan = current_plan.reorder(self.target_joint_names)
+        self._logger.debug(f"joint-space planning succeeded with {len(motion_plan.position)} waypoints")
+        motion_plan = motion_plan.squeeze(0).squeeze(0)  # [1, 1, n_waypoints, dof] -> [n_waypoints, dof]
+        return motion_plan
 
     def reset(self):
-        """reset the planner state"""
+        """Reset the planner state after env.reset()."""
 
-        self.motion_gen.reset()
+        self.motion_gen.scene_collision_checker.clear_cache()
+        self.motion_gen.update_world(self._static_scene_cfg)
+        self.motion_gen.reset_seed()
 
     def get_ee_pose(self, current_q: torch.Tensor) -> Pose:
         """Get the end-effector pose of the robot."""
 
-        return self.get_link_pose(current_q, self.motion_gen.kinematics.ee_link)
+        return self.get_link_pose(current_q, self.motion_gen.tool_frames[0])
 
     def get_link_pose(self, current_q: torch.Tensor, link_name: str) -> Pose:
         """Get the pose of a specific link in the robot root frame."""
@@ -1016,15 +787,15 @@ class CuroboPlanner:
             position=self._to_curobo_device(current_q), joint_names=self.target_joint_names
         )
         kin_state = self.motion_gen.compute_kinematics(current_joint_state)
+        all_link_poses = kin_state.tool_poses.to_dict()
 
         if link_names is None:
-            return kin_state.link_poses
+            return all_link_poses
         else:
-            missing_link_names = [link_name for link_name in link_names if link_name not in kin_state.link_poses]
+            missing_link_names = [link_name for link_name in link_names if link_name not in all_link_poses]
             if missing_link_names:
                 raise ValueError(
-                    f"Unknown cuRobo link name(s): {missing_link_names}. Available links:"
-                    f" {list(kin_state.link_poses.keys())}"
+                    f"Unknown cuRobo link name(s): {missing_link_names}. Available links: {list(all_link_poses.keys())}"
                 )
 
-            return {link_name: kin_state.link_poses[link_name] for link_name in link_names}
+            return {link_name: all_link_poses[link_name] for link_name in link_names}

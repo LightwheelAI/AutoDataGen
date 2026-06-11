@@ -1,6 +1,5 @@
 from dataclasses import MISSING
 
-from curobo.geom.sdf.world import CollisionCheckerType
 from isaaclab.utils.configclass import configclass
 
 from .curobo_planner import CuroboPlanner
@@ -22,17 +21,15 @@ class CuroboPlannerCfg:
     """Path to the curobo asset directory."""
 
     # Motion planning parameters
-    collision_checker_type: CollisionCheckerType = CollisionCheckerType.MESH
-    """Type of collision checker to use."""
     collision_cache: dict[str, int] = {"obb": 1000, "mesh": 500}
     """Collision cache for different collision types."""
-    collision_activation_distance: float = 0.05
+    collision_activation_distance: float = 0.01
     """Distance at which collision constraints are activated."""
     interpolation_dt: float = 0.05
     """Time step for interpolating."""
-    num_trajopt_seeds: int = 12
+    num_trajopt_seeds: int = 4
     """Number of seeds for trajectory optimization."""
-    num_graph_seeds: int = 12
+    num_graph_seeds: int = 32
     """Number of seeds for graph search."""
 
     # Planning configuration
@@ -44,8 +41,6 @@ class CuroboPlannerCfg:
     """Whether to use CUDA graph for planning."""
     max_planning_attempts: int = 10
     """Maximum number of planning attempts."""
-    time_dilation_factor: float = 0.5
-    """Time dilation factor for planning."""
     reach_partial_pose_weight: list[float] | None = None
     """Per-axis weights [rx, ry, rz, px, py, pz] for partial-pose reaching via cuRobo PoseCostMetric.
     Setting a weight to 0.0 relaxes that axis (e.g. [0,0,0,1,1,1] for position-only reaching)."""
@@ -63,8 +58,6 @@ class CuroboPlannerCfg:
     # Self-collision configuration
     self_collision_check: bool = True
     """Whether to check self-collision during planning."""
-    self_collision_opt: bool = True
-    """Whether to optimize away self-collisions during planning."""
 
     # World update strategy
     enable_dynamic_world_sync: bool = True
