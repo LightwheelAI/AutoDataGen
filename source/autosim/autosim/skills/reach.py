@@ -65,9 +65,9 @@ class ReachSkill(CuroboSkillBase):
         """Get current primary and extra link poses in robot root frame."""
 
         current_link_poses = self._planner.get_link_poses(
-            activate_q, [self._planner.motion_gen.kinematics.ee_link, *self.cfg.extra_cfg.extra_target_link_names]
+            activate_q, [self._planner.get_ee_link_name(), *self.cfg.extra_cfg.extra_target_link_names]
         )
-        primary_pose_in_robot_root = current_link_poses[self._planner.motion_gen.kinematics.ee_link]
+        primary_pose_in_robot_root = current_link_poses[self._planner.get_ee_link_name()]
         primary_link_pose_in_robot_root = (
             primary_pose_in_robot_root.position,
             convert_quat(primary_pose_in_robot_root.quaternion, to="xyzw"),  # cuRobo wxyz → xyzw
@@ -75,7 +75,7 @@ class ReachSkill(CuroboSkillBase):
         extra_link_poses_in_robot_root = {
             link_name: (pose.position, convert_quat(pose.quaternion, to="xyzw"))  # cuRobo wxyz → xyzw
             for link_name, pose in current_link_poses.items()
-            if link_name != self._planner.motion_gen.kinematics.ee_link
+            if link_name != self._planner.get_ee_link_name()
         }
         return primary_link_pose_in_robot_root, extra_link_poses_in_robot_root
 
