@@ -4,14 +4,14 @@ import logging
 from typing import TYPE_CHECKING
 
 import torch
+from curobo._src.robot.loader.util import load_robot_yaml
 from curobo._src.types.tool_pose import GoalToolPose
-from curobo._src.util.config_io import join_path, resolve_config
 from curobo._src.util.usd_scene_parser import UsdSceneParser
 from curobo._src.util.usd_util import get_prim_world_pose
-from curobo.content import get_robot_configs_path
+from curobo.content import get_assets_path, get_configs_path
 from curobo.logging import setup_logger
 from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
-from curobo.types import DeviceCfg, JointState, Pose, ToolPoseCriteria
+from curobo.types import ContentPath, DeviceCfg, JointState, Pose, ToolPoseCriteria
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils.math import quat_apply, quat_mul, subtract_frame_transforms
@@ -121,27 +121,31 @@ class CuroboPlanner:
         self.cfg.interpolation_dt = env.cfg.sim.dt * env.cfg.decimation
 
     def _load_robot_config(self) -> dict:
-        """Load robot configuration as a dict, injecting asset path when provided.
+        """Load robot configuration as a dict via ContentPath.
 
-        Returns a dict so MotionPlannerCfg.create() can receive external_asset_path
-        without depending on cuRobo's default content paths.
+        Uses cuRobo's ContentPath + load_robot_yaml to resolve config and asset
+        roots, then returns the resulting dict for MotionPlannerCfg.create().
+        Both curobo_config_path and curobo_asset_path are optional — when None,
+        cuRobo's bundled content paths are used.
         """
 
         if isinstance(self.cfg.robot_config_file, dict):
             self._logger.info("Using custom robot configuration dictionary.")
             return self.cfg.robot_config_file
 
-        # Load YAML: if robot_config_file is an absolute path it resolves directly;
-        # if relative, join with curobo_config_path (or curobo default).
-        config_root = self.cfg.curobo_config_path or get_robot_configs_path()
-        robot_dict = resolve_config(join_path(config_root, self.cfg.robot_config_file))
         self._logger.info(f"Loading robot configuration from {self.cfg.robot_config_file}")
 
-        if self.cfg.curobo_asset_path is not None:
-            # Inject asset path so KinematicsLoaderCfg picks up the right URDF/mesh root.
-            # external_asset_path is deprecated in v2 but still functional.
-            robot_dict["kinematics"]["external_asset_path"] = self.cfg.curobo_asset_path
+        curobo_config_path = self.cfg.curobo_config_path or f"{get_configs_path()}/robot"
+        curobo_asset_path = self.cfg.curobo_asset_path or get_assets_path()
 
+        content_path = ContentPath(
+            robot_config_root_path=curobo_config_path,
+            robot_urdf_root_path=curobo_asset_path,
+            robot_asset_root_path=curobo_asset_path,
+            robot_config_file=self.cfg.robot_config_file,
+        )
+        robot_dict = load_robot_yaml(content_path)
+        robot_dict["robot_cfg"]["kinematics"]["external_asset_path"] = curobo_asset_path
         return robot_dict
 
     def _to_curobo_device(self, tensor: torch.Tensor) -> torch.Tensor:
@@ -633,20 +637,36 @@ class CuroboPlanner:
 
         current_joint_state: JointState = state.reorder(self.target_joint_names)
 
-        # Build GoalToolPose for v2 API
-        ee_link = self.motion_gen.tool_frames[0]
-        pose_dict = {
-            ee_link: Pose(
-                position=self._to_curobo_device(target_pos),
-                quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
-            )
-        }
-        if link_goals is not None:
-            for link_name, pose7 in link_goals.items():
-                pose_dict[link_name] = Pose(
+        # Build GoalToolPose for v2 API.
+        # GoalToolPose must cover ALL tool_frames declared in the robot config.
+        # For any tool frame not supplied via link_goals, use its current FK pose
+        # so the planner treats it as a "hold in place" constraint.
+        ee_link = self.get_ee_link_name()
+        ee_pose = Pose(
+            position=self._to_curobo_device(target_pos),
+            quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
+        )
+        link_goals_map = link_goals or {}
+        assert ee_link not in link_goals_map, "ee_link should not be in link_goals_map"
+        missing_frames = [f for f in self.motion_gen.tool_frames if f != ee_link and f not in link_goals_map]
+        current_fk: dict[str, Pose] = {}
+        if missing_frames:
+            fk_state = JointState(position=self._to_curobo_device(current_q), joint_names=self.target_joint_names)
+            kin_state = self.motion_gen.compute_kinematics(fk_state)
+            current_fk = kin_state.tool_poses.to_dict()
+
+        pose_dict: dict[str, Pose] = {}
+        for tool_frame in self.motion_gen.tool_frames:
+            if tool_frame == ee_link:
+                pose_dict[tool_frame] = ee_pose
+            elif tool_frame in link_goals_map:
+                pose7 = link_goals_map[tool_frame]
+                pose_dict[tool_frame] = Pose(
                     position=self._to_curobo_device(pose7[:3]),
                     quaternion=self._to_curobo_device(convert_quat(pose7[3:], to="wxyz")),  # xyzw → wxyz
                 )
+            else:
+                pose_dict[tool_frame] = current_fk[tool_frame]
         goal = GoalToolPose.from_poses(pose_dict, ordered_tool_frames=list(pose_dict.keys()))
 
         # Set partial pose weight criteria before planning, reset afterwards if not used
@@ -770,10 +790,14 @@ class CuroboPlanner:
         self.motion_gen.update_world(self._static_scene_cfg)
         self.motion_gen.reset_seed()
 
+    def get_ee_link_name(self) -> str:
+        """Get the name of the end-effector link."""
+        return self.motion_gen.tool_frames[0]
+
     def get_ee_pose(self, current_q: torch.Tensor) -> Pose:
         """Get the end-effector pose of the robot."""
 
-        return self.get_link_pose(current_q, self.motion_gen.tool_frames[0])
+        return self.get_link_pose(current_q, self.get_ee_link_name())
 
     def get_link_pose(self, current_q: torch.Tensor, link_name: str) -> Pose:
         """Get the pose of a specific link in the robot root frame."""
