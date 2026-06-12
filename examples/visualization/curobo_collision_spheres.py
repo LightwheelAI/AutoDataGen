@@ -100,7 +100,7 @@ def _build_curobo_q(pipeline, env_id: int) -> torch.Tensor:
 def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Return (positions, radii) for all active collision spheres in world frame."""
     import isaaclab.utils.math as PoseUtils
-    from curobo.types.state import JointState
+    from curobo.types import JointState
 
     planner = pipeline._motion_planner
     robot = pipeline._robot
@@ -112,7 +112,8 @@ def _get_spheres_world(pipeline, env_id: int, q_curobo: torch.Tensor | None = No
     js = JointState(position=q_curobo, joint_names=planner.target_joint_names)
     kin_state = planner.motion_gen.compute_kinematics(js)
 
-    spheres_root = kin_state.robot_spheres[0].detach()  # [N, 4]
+    # v2: robot_spheres has shape [batch, horizon, num_spheres, 4]; flatten to [N, 4].
+    spheres_root = kin_state.robot_spheres[0, 0].detach()
 
     root_pose = as_torch(robot.data.root_pose_w)[env_id].detach()
     robot_root_pos = root_pose[:3]
@@ -297,7 +298,7 @@ def _print_link_pose_in_root_frame(
     - Isaac Lab: body_state_w (world frame) minus root_pose_w via subtract_frame_transforms.
     """
     import isaaclab.utils.math as PoseUtils
-    from curobo.types.state import JointState as CuroboJointState
+    from curobo.types import JointState as CuroboJointState
 
     planner = pipeline._motion_planner
     robot = pipeline._robot
@@ -307,7 +308,8 @@ def _print_link_pose_in_root_frame(
         q_curobo = _build_curobo_q(pipeline, env_id)
         js = CuroboJointState(position=q_curobo, joint_names=planner.target_joint_names)
         kin_state = planner.motion_gen.compute_kinematics(js)
-        link_poses_curobo = kin_state.link_poses
+        # v2: KinematicsState exposes link poses via tool_poses (ToolPose), not link_poses.
+        link_poses_curobo = kin_state.tool_poses.to_dict()
         if curobo_link_name not in link_poses_curobo:
             print(f"[cuRobo:{curobo_link_name}] link not found. Available: {list(link_poses_curobo.keys())}")
         else:
