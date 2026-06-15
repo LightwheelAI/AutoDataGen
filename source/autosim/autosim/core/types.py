@@ -43,9 +43,14 @@ class SkillGoal:
     target_object: str | None = None
     """The target object of the skill."""
     target_pose: torch.Tensor | None = None
-    """The target pose of the skill."""
+    """The target pose(s) of the skill in the robot root frame.
+
+    Shape is ``[K, 7]`` (xyz + xyzw quaternion). Single-target skills use ``K=1``;
+    batch-planning skills (e.g. :class:`ReachSkill`) use ``K>1`` to let the planner pick
+    the best successful candidate.
+    """
     extra_target_poses: dict[str, torch.Tensor] | None = None
-    """The target poses of the extra end-effectors. dict[link_name, target_pose]."""
+    """The target poses of the extra end-effectors. ``dict[link_name, [K, 7]]`` same ``K`` as ``target_pose``."""
     info: dict[str, Any] = field(default_factory=dict)
     """The information of the skill goal."""
 

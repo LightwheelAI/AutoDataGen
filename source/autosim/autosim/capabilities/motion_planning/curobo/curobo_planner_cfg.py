@@ -78,5 +78,11 @@ class CuroboPlannerCfg:
     cuda_device: int | None = 0
     """Preferred CUDA device index; None uses torch.cuda.current_device() (respects CUDA_VISIBLE_DEVICES)."""
 
+    # Batch planning
+    max_batch_size: int = 10
+    """Maximum batch size for plan_motion. Used to warmup CUDA graph with the correct buffer size.
+    Must be >= the largest number of reach candidates (K) used at runtime. If runtime K exceeds
+    this value, cuRobo will need to reset CUDA graph (requires CUDA >= 12.0 or CUROBO_TORCH_CUDA_GRAPH_RESET=1)."""
+
     env_scene_prefix: str | None = "Scene"
     """Prefix of the environment scene."""

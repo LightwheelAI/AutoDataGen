@@ -150,8 +150,8 @@ class RelativeReachSkill(ReachSkill):
         self._target_poses["target_pose"] = torch.cat((reach_target_pos_in_env, reach_target_quat_in_env), dim=-1)
 
         self._trajectory = self._planner.plan_motion(
-            target_pos,
-            target_quat,
+            target_pos.unsqueeze(0),
+            target_quat.unsqueeze(0),
             activate_q,
             activate_qd,
         )

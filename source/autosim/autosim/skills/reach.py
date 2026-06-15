@@ -56,7 +56,7 @@ class ReachSkill(CuroboSkillBase):
         self._corrective_reach_done = False
         self._saved_env = None
         self._saved_target_object = None
-        self._saved_reach_offset = None
+        self._saved_reach_offsets = None
         self._saved_env_extra_info = None
 
     def _get_current_primary_and_extra_link_poses(
@@ -223,7 +223,7 @@ class ReachSkill(CuroboSkillBase):
         self,
         env: ManagerBasedEnv,
         target_object: str,
-        reach_offset: torch.Tensor,
+        reach_offsets: torch.Tensor,
         env_extra_info: EnvExtraInfo,
     ) -> SkillGoal:
         """Compute reach goal by transforming object-frame offsets into robot root frame.
@@ -231,140 +231,126 @@ class ReachSkill(CuroboSkillBase):
         Args:
             env: The Isaac Lab environment.
             target_object: Name of the target object in the scene.
-            reach_offset: [7] tensor (pos + quat) in object frame for the primary EE.
+            reach_offsets: [K, 7] tensor of K candidate offsets (pos + quat) in object frame.
             env_extra_info: Env info for cfg-driven extra target.
 
         Returns:
-            SkillGoal with target poses in robot root frame.
+            SkillGoal whose target_pose has shape [K, 7] in robot root frame, ready for batch planning.
         """
 
+        reach_offsets = reach_offsets.to(env.device)
+        k = int(reach_offsets.shape[0])
+
         object_pose_in_env = as_torch(env.scene[target_object].data.root_pose_w)
+        object_pos_in_env = object_pose_in_env[:, :3].expand(k, -1)  # [K, 3]
+        object_quat_in_env = object_pose_in_env[:, 3:].expand(k, -1)  # [K, 4]
 
-        object_pos_in_env = object_pose_in_env[:, :3]
-        object_quat_in_env = object_pose_in_env[:, 3:]
-
-        offset = reach_offset.to(env.device).unsqueeze(0)
         reach_target_pos_in_env, reach_target_quat_in_env = PoseUtils.combine_frame_transforms(
-            object_pos_in_env, object_quat_in_env, offset[:, :3], offset[:, 3:]
+            object_pos_in_env, object_quat_in_env, reach_offsets[:, :3], reach_offsets[:, 3:]
         )
-        self._logger.debug(f"Reach target position in environment: {reach_target_pos_in_env}")
-        self._logger.debug(f"Reach target quaternion in environment: {reach_target_quat_in_env}")
-        self._target_poses["target_pose"] = torch.cat((reach_target_pos_in_env, reach_target_quat_in_env), dim=-1)
+        self._logger.debug(f"Reach target positions in environment ({k} candidates): {reach_target_pos_in_env}")
+        self._logger.debug(f"Reach target quaternions in environment ({k} candidates): {reach_target_quat_in_env}")
+        # Debug marker only renders one pose; use the first candidate for visualization.
+        self._target_poses["target_pose"] = torch.cat(
+            (reach_target_pos_in_env[:1], reach_target_quat_in_env[:1]), dim=-1
+        )
         self.visualize_debug_target_pose()
 
         robot = env.scene[env_extra_info.robot_name]
-        robot_root_pos_in_env = as_torch(robot.data.root_pose_w)[:, :3]
-        robot_root_quat_in_env = as_torch(robot.data.root_pose_w)[:, 3:]
+        robot_root_pose_in_env = as_torch(robot.data.root_pose_w)
+        robot_root_pos_in_env = robot_root_pose_in_env[:, :3].expand(k, -1)  # [K, 3]
+        robot_root_quat_in_env = robot_root_pose_in_env[:, 3:].expand(k, -1)  # [K, 4]
 
         reach_target_pos_in_root, reach_target_quat_in_root = PoseUtils.subtract_frame_transforms(
             robot_root_pos_in_env, robot_root_quat_in_env, reach_target_pos_in_env, reach_target_quat_in_env
         )
-        target_pose = torch.cat((reach_target_pos_in_root, reach_target_quat_in_root), dim=-1).squeeze(0)
+        target_pose = torch.cat((reach_target_pos_in_root, reach_target_quat_in_root), dim=-1)  # [K, 7]
         self._logger.debug(
-            f"Reach target pose in robot root frame: {reach_target_pos_in_root}, {reach_target_quat_in_root}"
+            f"Reach target poses in robot root frame ({k} candidates): "
+            f"pos={reach_target_pos_in_root}, quat={reach_target_quat_in_root}"
         )
 
         activate_q, _ = self._build_activate_joint_state(
             robot.data.joint_names, as_torch(robot.data.joint_pos)[0], as_torch(robot.data.joint_vel)[0]
         )
-        extra_target_poses = self._build_extra_target_poses(activate_q, target_pose, env_extra_info)
+        extra_target_poses = self._build_extra_target_poses_batch(activate_q, target_pose, env_extra_info)
 
         return SkillGoal(target_object=target_object, target_pose=target_pose, extra_target_poses=extra_target_poses)
 
-    def _select_best_candidate(
+    def _build_extra_target_poses_batch(
         self,
-        env: ManagerBasedEnv,
-        target_object: str,
-        candidates: list[torch.Tensor],
+        activate_q: torch.Tensor,
+        target_poses: torch.Tensor,
         env_extra_info: EnvExtraInfo,
-    ) -> torch.Tensor:
-        """Select the closest reach candidate in the target object's frame.
-
-        The current end-effector pose is transformed from world frame into the target
-        object's frame and compared against all candidate poses stored in object frame.
-        Selection is based on a weighted score consisting of position error plus
-        orientation error.
+    ) -> dict[str, torch.Tensor] | None:
+        """Build batched extra link goals by invoking the per-target builder for each candidate.
 
         Args:
-            env: The Isaac Lab environment.
-            target_object: Name of the target object in the scene.
-            candidates: List of K ``[7]`` tensors ``(pos + quat)`` in object frame.
-            env_extra_info: Environment extra information.
+            activate_q: Active joint positions for FK / offset computation.
+            target_poses: [K, 7] candidate primary target poses in robot root frame.
+            env_extra_info: Env info forwarded to per-target builder (used by ``keep_initial_relative_offset``
+                mode to share its cache across candidates).
 
         Returns:
-            The selected ``[7]`` offset tensor in object frame.
-
-        Raises:
-            ValueError: If candidates is empty.
+            Dict mapping link name to [K, 7] stacked target pose tensor, or None when there are no
+            extra target links configured.
         """
 
-        if not candidates:
-            raise ValueError(f"No reach candidates provided for object '{target_object}'.")
+        if not self.cfg.extra_cfg.extra_target_link_names:
+            return None
 
-        poses_oe = torch.stack([c.to(env.device) for c in candidates], dim=0)  # [K, 7]
+        per_k = [
+            self._build_extra_target_poses(activate_q, target_poses[i], env_extra_info)
+            for i in range(target_poses.shape[0])
+        ]
+        if per_k[0] is None:
+            return None
 
-        robot = env.scene[env_extra_info.robot_name]
-        ee_link_idx = robot.data.body_names.index(env_extra_info.ee_link_name)
-        ee_pose_w = as_torch(robot.data.body_link_pose_w)[0, ee_link_idx]  # [7]
-        obj_pose_w = as_torch(env.scene[target_object].data.root_pose_w)[0]  # [7]
-
-        ee_pos_oe, ee_quat_oe = PoseUtils.subtract_frame_transforms(
-            obj_pose_w[:3].unsqueeze(0),
-            obj_pose_w[3:].unsqueeze(0),
-            ee_pose_w[:3].unsqueeze(0),
-            ee_pose_w[3:].unsqueeze(0),
-        )
-        ee_pos_oe = ee_pos_oe.squeeze(0)  # [3]
-        ee_quat_oe = ee_quat_oe.squeeze(0)  # [4]
-
-        pos_err = torch.linalg.norm(poses_oe[:, :3] - ee_pos_oe.unsqueeze(0), dim=-1)
-        quat_dot = torch.sum(poses_oe[:, 3:] * ee_quat_oe.unsqueeze(0), dim=-1).abs().clamp(max=1.0)
-        rot_err = 1.0 * torch.acos(quat_dot)
-        score = pos_err + 1.0 * rot_err
-
-        best_idx = int(torch.argmin(score).item())
-        self._logger.debug(
-            f"Selected candidate {best_idx}/{len(candidates)} for '{target_object}' "
-            f"(position_error={float(pos_err[best_idx]):.4f}, rotation_error={float(rot_err[best_idx]):.4f})"
-        )
-        return candidates[best_idx]
+        return {link_name: torch.stack([d[link_name] for d in per_k], dim=0) for link_name in per_k[0].keys()}
 
     def _compute_corrective_goal(self) -> SkillGoal | None:
         """Re-compute reach goal using the object's current actual pose.
 
-        This is called after the first trajectory finishes. The same relative offset (in object
-        frame) is re-applied to the object's current pose, so if the object was nudged during
-        approach the robot corrects for it.
+        This is called after the first trajectory finishes. The same K candidate offsets
+        (in object frame) are re-applied to the object's current pose, so if the object was
+        nudged during approach the robot corrects for it by batch-replanning over all candidates.
         """
 
         goal = self._compute_goal_from_offset(
             self._saved_env,
             self._saved_target_object,
-            self._saved_reach_offset,
+            self._saved_reach_offsets,
             self._saved_env_extra_info,
         )
         if goal is not None:
-            self._logger.info("corrective_reach: recomputed target from current object pose")
+            self._logger.info("corrective_reach: recomputed targets from current object pose")
         return goal
 
     def extract_goal_from_info(
         self, skill_info: SkillInfo, env: ManagerBasedEnv, env_extra_info: EnvExtraInfo
     ) -> SkillGoal:
-        """Return the target pose[x, y, z, qx, qy, qz, qw] in the robot root frame.
+        """Return K candidate target poses [K, 7] (xyz + xyzw quat) in the robot root frame.
+
+        All candidate reach offsets are forwarded to cuRobo batch planning; the planner
+        picks the trajectory of the successful candidate with minimum
+        ``position_error + rotation_error``.
+
         IMPORTANT: the robot root frame is not the same as the robot base frame.
         """
 
         target_object = skill_info.target_object
         candidates = env_extra_info.get_reach_target_poses(target_object)
-        reach_offset = self._select_best_candidate(env, target_object, candidates, env_extra_info).to(env.device)
+        if not candidates:
+            raise ValueError(f"No reach candidates provided for object '{target_object}'.")
+        reach_offsets = torch.stack([c.to(env.device) for c in candidates], dim=0)  # [K, 7]
 
         # Save state needed for corrective reach re-planning
         self._saved_env = env
         self._saved_target_object = target_object
-        self._saved_reach_offset = reach_offset
+        self._saved_reach_offsets = reach_offsets
         self._saved_env_extra_info = env_extra_info
 
-        return self._compute_goal_from_offset(env, target_object, reach_offset, env_extra_info)
+        return self._compute_goal_from_offset(env, target_object, reach_offsets, env_extra_info)
 
     def execute_plan(self, state: WorldState, goal: SkillGoal) -> bool:
         """Execute the plan of the reach skill."""
@@ -374,8 +360,8 @@ class ReachSkill(CuroboSkillBase):
         # Set current target object for selective collision checking
         self._planner.set_target_object(goal.target_object)
 
-        target_pose = goal.target_pose  # target pose in the robot root frame
-        target_pos, target_quat = target_pose[:3], target_pose[3:]
+        target_pose = goal.target_pose  # [K, 7] in the robot root frame
+        target_pos, target_quat = target_pose[:, :3], target_pose[:, 3:]
 
         activate_q, activate_qd = self._build_activate_joint_state(
             state.sim_joint_names, state.robot_joint_pos, state.robot_joint_vel
@@ -467,6 +453,6 @@ class ReachSkill(CuroboSkillBase):
         self._corrective_reach_done = False
         self._saved_env = None
         self._saved_target_object = None
-        self._saved_reach_offset = None
+        self._saved_reach_offsets = None
         self._saved_env_extra_info = None
         self._planner.set_target_object(None)

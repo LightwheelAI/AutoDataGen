@@ -175,7 +175,7 @@ class RotateSkill(ReachSkill):
                 f"axis_in_root={axis_in_root}, step_angle={step_angle:.4f}"
             )
 
-            traj = self._planner.plan_motion(target_pos, target_quat, current_q, current_qd)
+            traj = self._planner.plan_motion(target_pos.unsqueeze(0), target_quat.unsqueeze(0), current_q, current_qd)
             if traj is None:
                 self._logger.warning(f"Rotate planning failed at step {i + 1}/{steps}")
                 if not trajectories:

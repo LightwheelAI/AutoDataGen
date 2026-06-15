@@ -105,9 +105,11 @@ class CuroboPlanner:
         self.usd_helper = UsdHelper()
         self.usd_helper.load_stage(env.scene.stage)
 
-        # Warm up planner
+        # Warm up planner in batch mode (plan_motion always uses plan_batch)
         self._logger.info("Warming up motion planner...")
-        self.motion_gen.warmup(enable_graph=self.cfg.use_cuda_graph, warmup_js_trajopt=False)
+        self.motion_gen.warmup(
+            enable_graph=self.cfg.use_cuda_graph, warmup_js_trajopt=False, batch=self.cfg.max_batch_size
+        )
 
         # Define supported cuRobo primitive types for object discovery and pose synchronization
         self.primitive_types: list[str] = ["mesh", "cuboid", "sphere", "capsule", "cylinder", "voxel", "blox"]
@@ -682,21 +684,75 @@ class CuroboPlanner:
         link_goals: dict[str, torch.Tensor] | None = None,
     ) -> JointState | None:
         """
-        Plan a trajectory to reach a target pose from a current joint state.
+        Plan a trajectory to one of K candidate target poses from a shared start joint state.
+
+        Always uses cuRobo's batch planning under the hood (``MotionGen.plan_batch``).
+        K=1 is treated identically to K>1, so callers do not need to branch on candidate count.
+        Among successful candidates, the trajectory with minimum
+        ``position_error + rotation_error`` is returned.
 
         Args:
-            target_pos: Target position [x, y, z]
-            target_quat: Target quaternion [qx, qy, qz, qw]
-            current_q: Current joint positions
-            current_qd: Current joint velocities
-            link_goals: Optional dictionary mapping link names to target poses for other links
+            target_pos: Target positions, shape ``[K, 3]``, in robot root frame.
+            target_quat: Target quaternions, shape ``[K, 4]`` in ``[qx, qy, qz, qw]``, in robot root frame.
+            current_q: Current joint positions, shape ``[dof]``. Shared across all K candidates.
+            current_qd: Current joint velocities, shape ``[dof]``. Defaults to zeros.
+            link_goals: Optional dict mapping extra link names to tensors of shape ``[K, 7]``
+                (``[x, y, z, qx, qy, qz, qw]``, robot root frame) for multi-arm robots.
 
         Returns:
-            JointState of the trajectory or None if planning failed
+            JointState of the best successful trajectory (ordered by ``target_joint_names``),
+            or None if every candidate failed to plan.
+
+        Note:
+            ``time_dilation_factor`` is suppressed because cuRobo's ``retime_trajectory`` does not
+            support batched results.
         """
 
         # Refine collision world before planning
         self._refine_curobo_world_collision()
+
+        # Shape validation
+        if target_pos.ndim != 2 or target_pos.shape[-1] != 3:
+            raise ValueError(f"target_pos must have shape [K, 3], got {tuple(target_pos.shape)}")
+        if target_quat.ndim != 2 or target_quat.shape[-1] != 4:
+            raise ValueError(f"target_quat must have shape [K, 4], got {tuple(target_quat.shape)}")
+        if target_pos.shape[0] != target_quat.shape[0]:
+            raise ValueError(
+                f"Batch size mismatch: target_pos has {target_pos.shape[0]}, target_quat has {target_quat.shape[0]}"
+            )
+        k = int(target_pos.shape[0])
+        if link_goals is not None:
+            for link_name, poses in link_goals.items():
+                if poses.ndim != 2 or poses.shape != (k, 7):
+                    raise ValueError(f"link_goals['{link_name}'] must have shape [{k}, 7], got {tuple(poses.shape)}")
+
+        # Pad batch to max_batch_size so the CUDA graph buffer shape stays fixed across calls.
+        # Extra padded entries reuse the first goal and are masked out when selecting results.
+        padded_k = self.cfg.max_batch_size
+        if k > padded_k:
+            from curobo.util.torch_utils import is_cuda_graph_reset_available
+
+            if is_cuda_graph_reset_available():
+                self._logger.warning(
+                    f"Number of reach candidates ({k}) exceeds max_batch_size ({padded_k}). "
+                    "CUDA graph will be reset (one-time performance cost). "
+                    f"Consider increasing CuroboPlannerCfg.max_batch_size to at least {k}."
+                )
+                padded_k = k
+            else:
+                raise ValueError(
+                    f"Number of reach candidates ({k}) exceeds CuroboPlannerCfg.max_batch_size ({padded_k}) "
+                    f"and CUDA graph reset is not available. Either increase max_batch_size to at least {k}, "
+                    "or set environment variable CUROBO_TORCH_CUDA_GRAPH_RESET=1 with CUDA >= 12.0."
+                )
+        if k < padded_k:
+            pad_count = padded_k - k
+            target_pos = torch.cat([target_pos, target_pos[:1].expand(pad_count, -1)], dim=0)
+            target_quat = torch.cat([target_quat, target_quat[:1].expand(pad_count, -1)], dim=0)
+            if link_goals is not None:
+                link_goals = {
+                    ln: torch.cat([poses, poses[:1].expand(pad_count, -1)], dim=0) for ln, poses in link_goals.items()
+                }
 
         if current_qd is None:
             current_qd = torch.zeros_like(current_q)
@@ -716,67 +772,70 @@ class CuroboPlanner:
             self._to_curobo_device(current_q), joint_limits.position[0], joint_limits.position[1]
         ).to(current_q.device)
 
-        # build the target pose
+        # build the batched target pose
         goal = Pose(
             position=self._to_curobo_device(target_pos),
             quaternion=self._to_curobo_device(convert_quat(target_quat, to="wxyz")),  # xyzw → wxyz
         )
 
-        # build the current state
-        state = JointState(
-            position=self._to_curobo_device(current_q),
-            velocity=self._to_curobo_device(current_qd) * 0.0,
-            acceleration=self._to_curobo_device(current_qd) * 0.0,
-            jerk=self._to_curobo_device(current_qd) * 0.0,
+        # build the batched current state (same start state replicated across padded_k seeds)
+        start_state = JointState(
+            position=self._to_curobo_device(current_q).view(1, -1),
+            velocity=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
+            acceleration=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
+            jerk=self._to_curobo_device(current_qd).view(1, -1) * 0.0,
             joint_names=self.target_joint_names,
-        )
+        ).repeat_seeds(padded_k)
+        start_state = start_state.get_ordered_joint_state(self.target_joint_names)
 
-        current_joint_state: JointState = state.get_ordered_joint_state(self.target_joint_names)
-
-        # Prepare link_poses for multi-arm robots
+        # Prepare batched link_poses for multi-arm robots
         link_poses = None
         if link_goals is not None:
-            # Use provided link goals
             link_poses = {
                 link_name: Pose(
-                    position=self._to_curobo_device(pose[:3]),
-                    quaternion=self._to_curobo_device(convert_quat(pose[3:], to="wxyz")),  # xyzw → wxyz
+                    position=self._to_curobo_device(poses[:, :3]),
+                    quaternion=self._to_curobo_device(convert_quat(poses[:, 3:], to="wxyz")),  # xyzw → wxyz
                 )
-                for link_name, pose in link_goals.items()
+                for link_name, poses in link_goals.items()
             }
 
-        # Build per-call plan config: clone only when we need to attach a pose_cost_metric
-        # so the shared self.plan_config is never mutated.
+        # Build per-call plan config. Always clone so we can safely disable time_dilation_factor
+        # (plan_batch does not support retime_trajectory) without mutating self.plan_config.
+        active_plan_config = self.plan_config.clone()
+        active_plan_config.time_dilation_factor = None
         if self.cfg.reach_partial_pose_weight is not None:
             weights = torch.tensor(
                 self.cfg.reach_partial_pose_weight,
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,
             )
-            pose_metric = PoseCostMetric(reach_partial_pose=True, reach_vec_weight=weights)
-            active_plan_config = self.plan_config.clone()
-            active_plan_config.pose_cost_metric = pose_metric
+            active_plan_config.pose_cost_metric = PoseCostMetric(reach_partial_pose=True, reach_vec_weight=weights)
             self._logger.debug(f"reach_partial_pose_weight applied: {self.cfg.reach_partial_pose_weight}")
-        else:
-            active_plan_config = self.plan_config
 
-        # execute planning
-        result = self.motion_gen.plan_single(
-            current_joint_state.unsqueeze(0),
-            goal,
-            active_plan_config,
-            link_poses=link_poses,
-        )
+        # execute batched planning
+        result = self.motion_gen.plan_batch(start_state, goal, active_plan_config, link_poses=link_poses)
 
-        if result.success.item():
-            current_plan = result.get_interpolated_plan()
-            motion_plan = current_plan.get_ordered_joint_state(self.target_joint_names)
-
-            self._logger.debug(f"planning succeeded with {len(motion_plan.position)} waypoints")
-            return motion_plan
-        else:
-            self._logger.warning(f"planning failed: {result.status}")
+        # Only consider the first k results (the rest are padding duplicates)
+        success_mask = result.success.view(-1)[:k].bool()
+        num_success = int(success_mask.sum().item())
+        if num_success == 0:
+            self._logger.warning(f"batch plan: all {k} candidates failed: {result.status}")
             return None
+
+        pos_err = result.position_error.view(-1)[:k]
+        rot_err = result.rotation_error.view(-1)[:k]
+        score = (pos_err + rot_err).masked_fill(~success_mask.to(pos_err.device), float("inf"))
+        best_idx = int(torch.argmin(score).item())
+
+        paths = result.get_paths()  # each path is already trimmed by path_buffer_last_tstep
+        motion_plan = paths[best_idx].get_ordered_joint_state(self.target_joint_names)
+
+        self._logger.debug(
+            f"batch plan: {num_success}/{k} succeeded, picked idx={best_idx}, "
+            f"pos_err={float(pos_err[best_idx]):.4f}, rot_err={float(rot_err[best_idx]):.4f}, "
+            f"waypoints={len(motion_plan.position)}"
+        )
+        return motion_plan
 
     def plan_to_joint_config(
         self,
