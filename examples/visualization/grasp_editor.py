@@ -68,8 +68,6 @@ import robofinals.autosim  # noqa: F401
 import yaml
 from isaacsim.core.utils.extensions import enable_extension, get_extension_id
 
-# import autosim_examples  # noqa: F401
-
 
 def _enable_ui_extensions() -> None:
     """Load Kit UI extensions that IsaacLab's slim app does not enable by default."""
@@ -333,15 +331,7 @@ def _append_converted_grasp_poses(
         "pose_format": "[x, y, z, qx, qy, qz, qw]",
         "poses": converted_poses,
     }
-    converted_yaml = yaml.safe_dump(
-        {"autosim_converted_grasp_poses": converted_section},
-        sort_keys=False,
-        default_flow_style=False,
-        width=4096,
-    )
-    converted_yaml = (
-        f"{converted_yaml.rstrip()}\n  torch_tensors:\n{_torch_tensor_list_body(converted_poses.values())}\n"
-    )
+    converted_yaml = _render_converted_grasp_section(converted_section, converted_poses)
     stripped_text = source_yaml_text.rstrip()
     new_text = f"{stripped_text}\n\n{CONVERTED_GRASP_BEGIN_MARKER}\n{converted_yaml}{CONVERTED_GRASP_END_MARKER}\n"
     with open(yaml_path, "w", encoding="utf-8") as f:
@@ -349,6 +339,16 @@ def _append_converted_grasp_poses(
 
     _log(f"[grasp_editor] Appended {len(converted_poses)} converted planner-frame grasp poses to: {yaml_path}")
     return True
+
+
+def _render_converted_grasp_section(converted_section: dict, converted_poses: dict[str, list[float]]) -> str:
+    converted_yaml = yaml.safe_dump(
+        {"autosim_converted_grasp_poses": converted_section},
+        sort_keys=False,
+        default_flow_style=False,
+        width=4096,
+    )
+    return f"{converted_yaml.rstrip()}\n  torch_tensors:\n{_torch_tensor_list_body(converted_poses.values())}\n"
 
 
 def _converted_confident_grasp_poses(grasp_data: dict, robot_profile: str) -> dict[str, list[float]]:
