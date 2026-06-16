@@ -237,6 +237,30 @@ def configure_grasp_editor_selection(
     _apply_pending_grasp_editor_selection(_LAST_GRASP_EDITOR_UI_BUILDER)
 
 
+def current_grasp_editor_export_path(default_export_path: str) -> str:
+    """Return the export path currently shown in Grasp Editor's UI."""
+
+    if _LAST_GRASP_EDITOR_UI_BUILDER is None:
+        return default_export_path
+
+    export_field = getattr(_LAST_GRASP_EDITOR_UI_BUILDER, "_export_path", None)
+    if export_field is None:
+        return default_export_path
+
+    for getter_name in ("get_value_as_string", "get_value"):
+        getter = getattr(export_field, getter_name, None)
+        if getter is None:
+            continue
+        try:
+            value = getter()
+        except Exception:
+            continue
+        if value:
+            return str(value)
+
+    return default_export_path
+
+
 def robot_prim_path(pipeline, env_id: int) -> str:
     robot = pipeline._robot
     if hasattr(robot, "prim_paths") and len(robot.prim_paths) > env_id:

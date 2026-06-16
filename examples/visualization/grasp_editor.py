@@ -22,7 +22,10 @@ Usage
 
 4) Repeat step 3 to export multiple grasps to the same yaml file if desired.
 
-5) Use the exported grasp poses in your pipeline.
+5) The script automatically appends confidence=1.0 poses converted to the pipeline
+   planner frame to the same yaml file after each export.
+
+6) Use the converted grasp poses in your pipeline.
 
 Notes
 -----
@@ -30,13 +33,19 @@ Notes
 * Grasp Editor poses are authored relative to the selected gripper base frame:
   `left_hand_link` for X7S, `left_wrist_yaw_link` for G1 WBC.
 * Pipeline pose tensors use [x, y, z, qx, qy, qz, qw].
-* The default exported files are written to `/tmp/autosim_grasp_editor_<pipeline>_<gripper>_*/`, but you are encouraged to specify your own export path in the Grasp Editor UI.
+* The default exported files are written to `/tmp/autosim_grasp_editor_<pipeline>_<gripper>_*/`.
+  Auto conversion watches the current Export File Path shown in Grasp Editor.
+* Auto conversion rewrites only the marked converted section, preserving the original
+  Isaac Grasp export above it.
 """
 
 import argparse
+import math
+import os
 import re
 import sys
 import tempfile
+import time
 import traceback
 
 from isaaclab.app import AppLauncher
@@ -53,10 +62,13 @@ simulation_app = app_launcher.app
 
 import carb
 import omni.usd
-from isaacsim.core.utils.extensions import enable_extension, get_extension_id
 
 # post-launch imports
-import autosim_examples  # noqa: F401
+import robofinals.autosim  # noqa: F401
+import yaml
+from isaacsim.core.utils.extensions import enable_extension, get_extension_id
+
+# import autosim_examples  # noqa: F401
 
 
 def _enable_ui_extensions() -> None:
@@ -81,6 +93,7 @@ from grasp_editor_helper import (
     add_world_fixed_joint,
     asset_prim_path,
     configure_grasp_editor_selection,
+    current_grasp_editor_export_path,
     extract_gripper_usd,
     first_reach_target_pose_w,
     get_gripper_profile,
@@ -108,6 +121,20 @@ ENV_ID = 0
 GRIPPER_PRIM_PATH = "/World/GraspEditor/Gripper"
 GRIPPER_INITIAL_WORLD_OFFSET = (0.0, 0.0, 0.30)
 GRASP_EDITOR_EXTENSIONS = ("isaacsim.robot_setup.grasp_editor",)
+AUTO_CONVERT_POLL_INTERVAL_S = 0.5
+AUTO_CONVERT_MIN_FILE_AGE_S = 0.5
+CONVERTED_GRASP_BEGIN_MARKER = "# autosim_converted_grasp_poses_begin"
+CONVERTED_GRASP_END_MARKER = "# autosim_converted_grasp_poses_end"
+PLANNER_FRAME_BY_ROBOT_PROFILE = {
+    "x7s_joint_left": "link11_tip",
+    "g1_wbc_left": "left_index_tip_link",
+}
+GRASP_EDITOR_FRAME_TO_PLANNER_POSE = {
+    # left_hand_link -> link11_tip, xyzw
+    "x7s_joint_left": (0.15, 0.0, 0.021756, 0.0, 0.0, 0.0, 1.0),
+    # left_wrist_yaw_link -> left_index_tip_link, xyzw
+    "g1_wbc_left": (0.11, -0.04, 0.0, 0.0, 0.0, 0.0, 1.0),
+}
 
 
 def _enable_grasp_editor(gripper_profile) -> str | None:
@@ -214,10 +241,250 @@ def _remove_source_robot(stage, robot_path: str) -> None:
         carb.log_warn(f"[grasp_editor] Failed to remove source robot from stage: {robot_path}")
 
 
+def _make_auto_convert_state() -> dict[str, float | str | None]:
+    return {
+        "last_checked_at": None,
+        "last_handled_mtime": None,
+        "export_path": None,
+    }
+
+
+def _maybe_auto_convert_exported_grasps(
+    auto_convert_state: dict[str, float | str | None],
+    *,
+    export_path: str,
+    robot_profile: str,
+    target_name: str | None,
+) -> None:
+    now = time.monotonic()
+    last_checked_at = auto_convert_state["last_checked_at"]
+    if last_checked_at is not None and now - last_checked_at < AUTO_CONVERT_POLL_INTERVAL_S:
+        return
+    auto_convert_state["last_checked_at"] = now
+
+    try:
+        export_mtime = os.path.getmtime(export_path)
+    except FileNotFoundError:
+        return
+
+    if auto_convert_state["export_path"] != export_path:
+        auto_convert_state["export_path"] = export_path
+        auto_convert_state["last_handled_mtime"] = None
+        _log(f"[grasp_editor] Auto-convert watching export path: {export_path}")
+
+    last_handled_mtime = auto_convert_state["last_handled_mtime"]
+    if last_handled_mtime is not None and export_mtime <= last_handled_mtime:
+        return
+    if time.time() - export_mtime < AUTO_CONVERT_MIN_FILE_AGE_S:
+        return
+
+    try:
+        handled = _append_converted_grasp_poses(
+            export_path,
+            robot_profile=robot_profile,
+            target_name=target_name,
+        )
+    except Exception as exc:
+        _log(f"[grasp_editor] Failed to auto-convert grasp poses: {exc}")
+        traceback.print_exc(file=sys.__stderr__)
+        return
+
+    if handled:
+        try:
+            auto_convert_state["last_handled_mtime"] = os.path.getmtime(export_path)
+        except FileNotFoundError:
+            auto_convert_state["last_handled_mtime"] = export_mtime
+
+
+def _append_converted_grasp_poses(
+    yaml_path: str,
+    *,
+    robot_profile: str,
+    target_name: str | None,
+) -> bool:
+    try:
+        with open(yaml_path, encoding="utf-8") as f:
+            yaml_text = f.read()
+        source_yaml_text = _strip_existing_converted_grasp_section(yaml_text)
+        grasp_data = yaml.safe_load(source_yaml_text)
+    except FileNotFoundError:
+        _log(f"[grasp_editor] Grasp yaml does not exist yet: {yaml_path}")
+        return True
+    except Exception as exc:
+        _log(f"[grasp_editor] Failed to load grasp yaml '{yaml_path}': {exc}")
+        return False
+
+    if not isinstance(grasp_data, dict):
+        _log(f"[grasp_editor] Cannot convert grasp yaml with non-mapping root: {yaml_path}")
+        return True
+
+    converted_poses = _converted_confident_grasp_poses(grasp_data, robot_profile)
+    if not converted_poses:
+        _log(f"[grasp_editor] No confidence=1.0 grasps found in: {yaml_path}")
+        return True
+
+    converted_section = {
+        "source_confidence": 1.0,
+        "robot_profile": robot_profile,
+        "target_object_name": target_name,
+        "source_object_frame": grasp_data.get("object_frame"),
+        "source_gripper_frame": grasp_data.get("gripper_frame"),
+        "planner_frame": PLANNER_FRAME_BY_ROBOT_PROFILE[robot_profile],
+        "pose_format": "[x, y, z, qx, qy, qz, qw]",
+        "poses": converted_poses,
+    }
+    converted_yaml = yaml.safe_dump(
+        {"autosim_converted_grasp_poses": converted_section},
+        sort_keys=False,
+        default_flow_style=False,
+        width=4096,
+    )
+    converted_yaml = (
+        f"{converted_yaml.rstrip()}\n  torch_tensors:\n{_torch_tensor_list_body(converted_poses.values())}\n"
+    )
+    stripped_text = source_yaml_text.rstrip()
+    new_text = f"{stripped_text}\n\n{CONVERTED_GRASP_BEGIN_MARKER}\n{converted_yaml}{CONVERTED_GRASP_END_MARKER}\n"
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        f.write(new_text)
+
+    _log(f"[grasp_editor] Appended {len(converted_poses)} converted planner-frame grasp poses to: {yaml_path}")
+    return True
+
+
+def _converted_confident_grasp_poses(grasp_data: dict, robot_profile: str) -> dict[str, list[float]]:
+    if robot_profile not in GRASP_EDITOR_FRAME_TO_PLANNER_POSE:
+        available = ", ".join(sorted(GRASP_EDITOR_FRAME_TO_PLANNER_POSE))
+        raise ValueError(f"Unsupported Grasp Editor conversion profile '{robot_profile}'. Available: {available}")
+
+    grasps = grasp_data.get("grasps")
+    if not isinstance(grasps, dict):
+        return {}
+
+    converted_poses = {}
+    gripper_frame_to_planner_pose = GRASP_EDITOR_FRAME_TO_PLANNER_POSE[robot_profile]
+    for grasp_name, grasp in grasps.items():
+        if not isinstance(grasp, dict) or not _is_confident_grasp(grasp):
+            continue
+        gripper_pose = _grasp_yaml_pose_xyzw(grasp)
+        converted_poses[str(grasp_name)] = _rounded_pose(
+            _compose_poses_xyzw(gripper_pose, gripper_frame_to_planner_pose)
+        )
+    return converted_poses
+
+
+def _is_confident_grasp(grasp: dict) -> bool:
+    try:
+        return math.isclose(float(grasp.get("confidence", 0.0)), 1.0, rel_tol=0.0, abs_tol=1.0e-9)
+    except (TypeError, ValueError):
+        return False
+
+
+def _grasp_yaml_pose_xyzw(grasp: dict) -> tuple[float, float, float, float, float, float, float]:
+    position = grasp.get("position")
+    orientation = grasp.get("orientation")
+    if not isinstance(position, (list, tuple)) or len(position) != 3:
+        raise ValueError(f"Expected grasp position with 3 values, got: {position}")
+    if not isinstance(orientation, dict):
+        raise ValueError(f"Expected grasp orientation mapping, got: {orientation}")
+    xyz = orientation.get("xyz")
+    if not isinstance(xyz, (list, tuple)) or len(xyz) != 3 or "w" not in orientation:
+        raise ValueError(f"Expected orientation as {{w, xyz[3]}}, got: {orientation}")
+    return (
+        float(position[0]),
+        float(position[1]),
+        float(position[2]),
+        float(xyz[0]),
+        float(xyz[1]),
+        float(xyz[2]),
+        float(orientation["w"]),
+    )
+
+
+def _compose_poses_xyzw(
+    parent_to_frame: tuple[float, float, float, float, float, float, float],
+    frame_to_child: tuple[float, float, float, float, float, float, float],
+) -> tuple[float, float, float, float, float, float, float]:
+    first_pos, first_quat = parent_to_frame[:3], _normalize_quat_xyzw(parent_to_frame[3:])
+    second_pos, second_quat = frame_to_child[:3], _normalize_quat_xyzw(frame_to_child[3:])
+
+    child_pos = _vec_add(first_pos, _quat_rotate_xyzw(first_quat, second_pos))
+    child_quat = _normalize_quat_xyzw(_quat_multiply_xyzw(first_quat, second_quat))
+    return (*child_pos, *child_quat)
+
+
+def _quat_multiply_xyzw(
+    q1: tuple[float, float, float, float],
+    q2: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    x1, y1, z1, w1 = q1
+    x2, y2, z2, w2 = q2
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
+
+
+def _quat_rotate_xyzw(
+    quat: tuple[float, float, float, float],
+    vector: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    quat_vec = quat[:3]
+    uv = _cross(quat_vec, vector)
+    uuv = _cross(quat_vec, uv)
+    return _vec_add(vector, _vec_scale(_vec_add(_vec_scale(uv, quat[3]), uuv), 2.0))
+
+
+def _normalize_quat_xyzw(quat: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    norm = math.sqrt(sum(value * value for value in quat))
+    if math.isclose(norm, 0.0):
+        raise ValueError("Cannot normalize a zero quaternion.")
+    return tuple(value / norm for value in quat)
+
+
+def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _vec_add(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(a_i + b_i for a_i, b_i in zip(a, b, strict=True))
+
+
+def _vec_scale(vector: tuple[float, ...], scale: float) -> tuple[float, ...]:
+    return tuple(value * scale for value in vector)
+
+
+def _rounded_pose(pose: tuple[float, ...]) -> list[float]:
+    return [round(value, 12) for value in pose]
+
+
+def _torch_tensor_literal(pose: list[float]) -> str:
+    values = ", ".join(f"{value:.12g}" for value in pose)
+    return f"torch.tensor([{values}])"
+
+
+def _torch_tensor_list_body(poses) -> str:
+    return "\n".join(f"    {_torch_tensor_literal(pose)}," for pose in poses)
+
+
+def _strip_existing_converted_grasp_section(yaml_text: str) -> str:
+    pattern = re.compile(
+        rf"\n?{re.escape(CONVERTED_GRASP_BEGIN_MARKER)}\n.*?{re.escape(CONVERTED_GRASP_END_MARKER)}\n?",
+        flags=re.DOTALL,
+    )
+    return pattern.sub("\n", yaml_text)
+
+
 def main():
     pipeline = _load_pipeline_scene()
     stage = omni.usd.get_context().get_stage()
-    gripper_profile = get_gripper_profile(robot_profile_id(pipeline))
+    robot_profile = robot_profile_id(pipeline)
+    gripper_profile = get_gripper_profile(robot_profile)
     ext_id = _enable_grasp_editor(gripper_profile)
     # Extension startup can finish after the first app updates; the patch is idempotent.
     patch_grasp_editor_runtime(gripper_profile)
@@ -260,7 +527,16 @@ def main():
         select_object_path=select_object_path,
     )
 
+    _log(f"[grasp_editor] Auto-convert enabled for exported grasps: {export_path}")
+    auto_convert_state = _make_auto_convert_state()
     while simulation_app.is_running():
+        active_export_path = current_grasp_editor_export_path(export_path)
+        _maybe_auto_convert_exported_grasps(
+            auto_convert_state,
+            export_path=active_export_path,
+            robot_profile=robot_profile,
+            target_name=target_name,
+        )
         simulation_app.update()
 
 
