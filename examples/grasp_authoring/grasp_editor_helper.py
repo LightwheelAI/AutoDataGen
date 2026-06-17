@@ -549,13 +549,13 @@ def _make_physics_helpers(SimulationManager):
             return SimulationManager.get_physics_simulation_view()
         return None
 
-    def ensure_physics_sim_view(force_recreate: bool = False) -> None:
+    def ensure_physics_sim_view() -> None:
         _configure_grasp_editor_physics_sync(SimulationManager)
-        if not force_recreate and get_physics_sim_view() is not None:
+        if get_physics_sim_view() is not None:
             return
         if hasattr(SimulationManager, "initialize_physics"):
             SimulationManager.initialize_physics()
-        if (force_recreate or get_physics_sim_view() is None) and hasattr(SimulationManager, "_create_simulation_view"):
+        if get_physics_sim_view() is None and hasattr(SimulationManager, "_create_simulation_view"):
             SimulationManager._create_simulation_view(None)
 
     def coerce_backend_data(backend_utils, device, data, dtype="float32"):
@@ -721,7 +721,7 @@ def _make_articulation_patches(originals, ensure_physics_sim_view, coerce_backen
         return control_actions
 
     def articulation_constructor(self, *args, **kwargs):
-        ensure_physics_sim_view(force_recreate=True)
+        ensure_physics_sim_view()
         return original_articulation_constructor(self, *args, **kwargs)
 
     def articulation_initialize(self, *args, **kwargs):
@@ -1042,6 +1042,36 @@ def _copy_link_subtree_without_selected_children(
         rel_path = prim.GetPath().MakeRelativePath(src_link_path)
         dst_path = dst_link_path if str(rel_path) == "." else dst_link_path.AppendPath(str(rel_path))
         Sdf.CopySpec(flat_layer, prim.GetPath(), dst_layer, dst_path)
+    _remove_copied_excluded_link_children(
+        dst_stage=dst_stage,
+        src_link_path=src_link_path,
+        src_link_paths=src_link_paths,
+        dst_link_path=dst_link_path,
+    )
+    _remove_copied_joint_prims(dst_stage, dst_link_path)
+
+
+def _remove_copied_excluded_link_children(
+    *,
+    dst_stage,
+    src_link_path: Sdf.Path,
+    src_link_paths: list[Sdf.Path],
+    dst_link_path: Sdf.Path,
+) -> None:
+    for other in src_link_paths:
+        if other == src_link_path or not _is_descendant_or_self(other, src_link_path):
+            continue
+        rel_path = other.MakeRelativePath(src_link_path)
+        dst_stage.RemovePrim(dst_link_path.AppendPath(str(rel_path)))
+
+
+def _remove_copied_joint_prims(dst_stage, root_path: Sdf.Path) -> None:
+    root_prim = dst_stage.GetPrimAtPath(root_path)
+    joint_paths = [
+        prim.GetPath() for prim in Usd.PrimRange(root_prim) if prim.GetPath() != root_path and _is_joint_prim(prim)
+    ]
+    for joint_path in sorted(joint_paths, key=lambda path: len(str(path)), reverse=True):
+        dst_stage.RemovePrim(joint_path)
 
 
 def _reference_list_items(reference_list_op) -> list[Sdf.Reference]:

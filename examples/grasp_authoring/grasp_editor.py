@@ -70,11 +70,10 @@ simulation_app = app_launcher.app
 
 import carb
 import omni.usd
-
-# post-launch imports
-import robofinals.autosim  # noqa: F401
 import yaml
 from isaacsim.core.utils.extensions import enable_extension, get_extension_id
+
+import autosim_examples  # noqa: F401
 
 
 def _enable_ui_extensions() -> None:
@@ -113,7 +112,7 @@ from grasp_editor_helper import (
     set_selection,
     target_object_name,
 )
-from pxr import Sdf
+from pxr import Usd, UsdGeom, UsdPhysics
 
 from autosim import make_pipeline
 
@@ -122,29 +121,54 @@ def _log(message: str = "") -> None:
     print(message, file=sys.__stderr__, flush=True)
 
 
-ENV_ID = 0
+def _force_cpu_pipeline_for_grasp_authoring() -> None:
+    """Load IsaacLab environments on CPU for Grasp Editor authoring.
+
+    Grasp Editor is an interactive GUI tool and does not need IsaacLab's GPU tensor pipeline.
+    Keeping the authoring scene on CPU avoids mixing pipeline-owned GPU tensor views with the
+    standalone gripper articulation created by Grasp Editor.
+    """
+    import isaaclab_tasks.utils as task_utils
+
+    original_parse_env_cfg = task_utils.parse_env_cfg
+    if getattr(original_parse_env_cfg, "_autosim_grasp_editor_cpu_patch", False):
+        return
+
+    def parse_env_cfg_cpu(
+        task_name: str,
+        device: str = "cuda:0",
+        num_envs: int | None = None,
+        use_fabric: bool | None = None,
+    ):
+        return original_parse_env_cfg(
+            task_name=task_name,
+            device="cpu",
+            num_envs=num_envs,
+            use_fabric=False,
+        )
+
+    parse_env_cfg_cpu._autosim_grasp_editor_cpu_patch = True
+    task_utils.parse_env_cfg = parse_env_cfg_cpu
+    _log("[grasp_editor] Forcing IsaacLab pipeline env to device=cpu, use_fabric=False.")
+
+
 GRIPPER_PRIM_PATH = "/World/GraspEditor/Gripper"
 GRIPPER_INITIAL_WORLD_OFFSET = (0.0, 0.0, 0.30)
-GRASP_EDITOR_EXTENSIONS = ("isaacsim.robot_setup.grasp_editor",)
-AUTO_CONVERT_POLL_INTERVAL_S = 0.5
-AUTO_CONVERT_MIN_FILE_AGE_S = 0.5
-CONVERTED_GRASP_BEGIN_MARKER = "# autosim_converted_grasp_poses_begin"
-CONVERTED_GRASP_END_MARKER = "# autosim_converted_grasp_poses_end"
 
 
 def _enable_grasp_editor(gripper_profile) -> str | None:
-    for ext_name in GRASP_EDITOR_EXTENSIONS:
-        try:
-            enable_extension(ext_name)
-            patch_grasp_editor_runtime(gripper_profile)
-            for _ in range(5):
-                simulation_app.update()
-            ext_id = get_extension_id(ext_name)
-            if ext_id:
-                _log(f"[grasp_editor] Enabled extension: {ext_name}")
-                return ext_id
-        except Exception as exc:
-            _log(f"[grasp_editor] Extension not available ({ext_name}): {exc}")
+    ext_name = "isaacsim.robot_setup.grasp_editor"
+    try:
+        enable_extension(ext_name)
+        patch_grasp_editor_runtime(gripper_profile)
+        for _ in range(5):
+            simulation_app.update()
+        ext_id = get_extension_id(ext_name)
+        if ext_id:
+            _log(f"[grasp_editor] Enabled extension: {ext_name}")
+            return ext_id
+    except Exception as exc:
+        _log(f"[grasp_editor] Extension not available ({ext_name}): {exc}")
     _log("[grasp_editor] WARNING: Grasp Editor extension could not be enabled automatically.")
     return None
 
@@ -196,6 +220,7 @@ def _print_scene_summary(
 
 
 def _load_pipeline_scene():
+    _force_cpu_pipeline_for_grasp_authoring()
     _log(f"[grasp_editor] Loading pipeline: {args_cli.pipeline_id}")
     _log("[grasp_editor] Creating pipeline object...")
     pipeline = make_pipeline(args_cli.pipeline_id)
@@ -219,21 +244,35 @@ def _make_work_dir(gripper_profile) -> str:
     return tempfile.mkdtemp(prefix=prefix)
 
 
-def _target_object_paths(pipeline, stage) -> tuple[str | None, str | None, str | None]:
+def _target_object_paths(pipeline, stage, env_id: int) -> tuple[str | None, str | None, str | None]:
     target_name = target_object_name(pipeline)
     if target_name is None:
         return None, None, None
 
-    object_path = asset_prim_path(pipeline._env.scene[target_name], ENV_ID)
+    object_path = asset_prim_path(pipeline._env.scene[target_name], env_id)
     rigid_body_path = object_rigid_body_path(stage, object_path)
     return target_name, object_path, rigid_body_path
 
 
-def _remove_source_robot(stage, robot_path: str) -> None:
-    if stage.RemovePrim(Sdf.Path(robot_path)):
-        _log(f"[grasp_editor] Removed source robot from stage: {robot_path}")
-    else:
-        carb.log_warn(f"[grasp_editor] Failed to remove source robot from stage: {robot_path}")
+def _suppress_source_robot(stage, robot_path: str) -> None:
+    """Hide the pipeline robot and disable its colliders without deleting prims.
+
+    IsaacLab keeps Python-side handles to the robot articulation after env reset.
+    Removing the robot prim can leave those handles stale, while hiding and
+    disabling collisions is enough for Grasp Editor authoring.
+    """
+    robot_prim = stage.GetPrimAtPath(robot_path)
+    if not robot_prim or not robot_prim.IsValid():
+        carb.log_warn(f"[grasp_editor] Source robot prim not found: {robot_path}")
+        return
+
+    UsdGeom.Imageable(robot_prim).MakeInvisible()
+    disabled_colliders = 0
+    for prim in Usd.PrimRange(robot_prim):
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
+            disabled_colliders += 1
+    _log(f"[grasp_editor] Hid source robot and disabled {disabled_colliders} robot colliders: {robot_path}")
 
 
 def _make_auto_convert_state() -> dict[str, float | str | None]:
@@ -251,9 +290,11 @@ def _maybe_auto_convert_exported_grasps(
     gripper_profile,
     target_name: str | None,
 ) -> None:
+    poll_interval_s = 0.5
+    min_file_age_s = 0.5
     now = time.monotonic()
     last_checked_at = auto_convert_state["last_checked_at"]
-    if last_checked_at is not None and now - last_checked_at < AUTO_CONVERT_POLL_INTERVAL_S:
+    if last_checked_at is not None and now - last_checked_at < poll_interval_s:
         return
     auto_convert_state["last_checked_at"] = now
 
@@ -270,7 +311,7 @@ def _maybe_auto_convert_exported_grasps(
     last_handled_mtime = auto_convert_state["last_handled_mtime"]
     if last_handled_mtime is not None and export_mtime <= last_handled_mtime:
         return
-    if time.time() - export_mtime < AUTO_CONVERT_MIN_FILE_AGE_S:
+    if time.time() - export_mtime < min_file_age_s:
         return
 
     try:
@@ -330,7 +371,9 @@ def _append_converted_grasp_poses(
     }
     converted_yaml = _render_converted_grasp_section(converted_section, converted_poses)
     stripped_text = source_yaml_text.rstrip()
-    new_text = f"{stripped_text}\n\n{CONVERTED_GRASP_BEGIN_MARKER}\n{converted_yaml}{CONVERTED_GRASP_END_MARKER}\n"
+    new_text = (
+        f"{stripped_text}\n\n{_converted_grasp_begin_marker()}\n{converted_yaml}{_converted_grasp_end_marker()}\n"
+    )
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write(new_text)
 
@@ -467,13 +510,22 @@ def _torch_tensor_list_body(poses) -> str:
 
 def _strip_existing_converted_grasp_section(yaml_text: str) -> str:
     pattern = re.compile(
-        rf"\n?{re.escape(CONVERTED_GRASP_BEGIN_MARKER)}\n.*?{re.escape(CONVERTED_GRASP_END_MARKER)}\n?",
+        rf"\n?{re.escape(_converted_grasp_begin_marker())}\n.*?{re.escape(_converted_grasp_end_marker())}\n?",
         flags=re.DOTALL,
     )
     return pattern.sub("\n", yaml_text)
 
 
+def _converted_grasp_begin_marker() -> str:
+    return "# autosim_converted_grasp_poses_begin"
+
+
+def _converted_grasp_end_marker() -> str:
+    return "# autosim_converted_grasp_poses_end"
+
+
 def main():
+    env_id = 0
     pipeline = _load_pipeline_scene()
     stage = omni.usd.get_context().get_stage()
     gripper_profile = load_gripper_profile(args_cli.gripper_cfg)
@@ -481,8 +533,8 @@ def main():
     # Extension startup can finish after the first app updates; the patch is idempotent.
     patch_grasp_editor_runtime(gripper_profile)
 
-    robot_path = robot_prim_path(pipeline, ENV_ID)
-    target_name, object_path, rigid_body_path = _target_object_paths(pipeline, stage)
+    robot_path = robot_prim_path(pipeline, env_id)
+    target_name, object_path, rigid_body_path = _target_object_paths(pipeline, stage, env_id)
 
     link_paths = resolve_gripper_link_paths(stage, robot_path, gripper_profile)
     tmp_dir = _make_work_dir(gripper_profile)
@@ -491,12 +543,12 @@ def main():
     reference_gripper_usd(stage, gripper_usd_path, GRIPPER_PRIM_PATH)
 
     gripper_pose_w = offset_pose_w(
-        first_reach_target_pose_w(pipeline, target_name, ENV_ID),
+        first_reach_target_pose_w(pipeline, target_name, env_id),
         xyz=GRIPPER_INITIAL_WORLD_OFFSET,
     )
     set_prim_pose_w(stage, GRIPPER_PRIM_PATH, gripper_pose_w)
     add_world_fixed_joint(stage, GRIPPER_PRIM_PATH, gripper_profile)
-    _remove_source_robot(stage, robot_path)
+    _suppress_source_robot(stage, robot_path)
     for _ in range(3):
         simulation_app.update()
 
